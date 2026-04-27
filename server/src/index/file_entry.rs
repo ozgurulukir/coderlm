@@ -23,6 +23,7 @@ pub enum Language {
     Html,
     Css,
     Sql,
+    Vue,
     Other,
 }
 
@@ -47,6 +48,7 @@ impl Language {
             "html" | "htm" => Language::Html,
             "css" | "scss" | "less" => Language::Css,
             "sql" => Language::Sql,
+            "vue" => Language::Vue,
             _ => Language::Other,
         }
     }
@@ -63,7 +65,7 @@ impl Language {
         matches!(
             self,
             Language::Rust | Language::Python | Language::TypeScript | Language::JavaScript | Language::Go
-            | Language::Java | Language::Scala
+            | Language::Java | Language::Scala | Language::Vue
         )
     }
 }

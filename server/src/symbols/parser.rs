@@ -10,13 +10,64 @@ use crate::symbols::queries;
 use crate::symbols::symbol::{Symbol, SymbolKind};
 use crate::symbols::SymbolTable;
 
+/// Extract the content of the first `<script>` block from a Vue SFC.
+/// Falls back to the entire file content if no script block is found.
+fn extract_vue_script_content(source: &str) -> String {
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_vue_updated::language())
+        .expect("Failed to load tree-sitter-vue grammar");
+
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return source.to_string(),
+    };
+
+    // Walk the AST to find the first script_element and its raw_text child
+    fn find_script_raw<'a>(node: tree_sitter::Node<'a>, source: &str) -> Option<String> {
+        if node.kind() == "raw_text" {
+            // Check if parent is a script_element
+            if let Some(parent) = node.parent() {
+                if parent.kind() == "script_element" {
+                    return Some(node.utf8_text(source.as_bytes()).unwrap_or("").to_string());
+                }
+            }
+        }
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i as u32) {
+                if let Some(content) = find_script_raw(child, source) {
+                    return Some(content);
+                }
+            }
+        }
+        None
+    }
+
+    find_script_raw(tree.root_node(), source).unwrap_or_default()
+}
+
 /// Extract symbols from a single file.
 pub fn extract_symbols_from_file(
     root: &Path,
     rel_path: &str,
     language: Language,
 ) -> Result<Vec<Symbol>> {
-    let config = match queries::get_language_config(language) {
+    let abs_path = root.join(rel_path);
+    let raw_source = std::fs::read_to_string(&abs_path)?;
+
+    // For Vue files, extract the <script> content and parse it as TypeScript.
+    let (_source, effective_language) = if language == Language::Vue {
+        let script_content = extract_vue_script_content(&raw_source);
+        if script_content.is_empty() {
+            debug!("No <script> block found in {}", rel_path);
+            return Ok(Vec::new());
+        }
+        (script_content, Language::TypeScript)
+    } else {
+        (raw_source, language)
+    };
+
+    let config = match queries::get_language_config(effective_language) {
         Some(c) => c,
         None => return Ok(Vec::new()),
     };
@@ -156,7 +207,7 @@ pub fn extract_symbols_from_file(
                 file: rel_path.to_string(),
                 byte_range,
                 line_range,
-                language,
+                language: if language == Language::Vue { Language::Vue } else { effective_language },
                 signature,
                 definition: None,
                 parent,

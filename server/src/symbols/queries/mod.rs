@@ -4,6 +4,7 @@ pub mod python;
 pub mod rust;
 pub mod scala;
 pub mod typescript;
+pub mod vue;
 
 use crate::index::file_entry::Language;
 
@@ -17,6 +18,7 @@ pub fn get_language_config(lang: Language) -> Option<LanguageConfig> {
         Language::Go => Some(go::config()),
         Language::Java => Some(java::config()),
         Language::Scala => Some(scala::config()),
+        Language::Vue => Some(vue::config()),
         _ => None,
     }
 }
