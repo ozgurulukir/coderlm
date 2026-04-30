@@ -48,7 +48,7 @@ The server is a single-binary axum application. Key modules under `server/src/`:
 
 - **`main.rs`** — CLI parsing (clap) and server startup
 - **`server/`** — HTTP layer
-  - `state.rs` — `AppState` holding `DashMap<PathBuf, Project>` and `DashMap<String, Session>`. Multi-project support with LRU eviction at capacity.
+  - `state.rs` — `AppState` holding `DashMap<PathBuf, Project>` and `DashMap<String, Session>`. Multi-project support with LRU eviction at capacity. Includes `FileCache` (50MB LRU) and `ParseCache` (tree-sitter Tree cache) per project.
   - `routes.rs` — All route handlers. Each handler calls `require_project()` to resolve session→project, then delegates to an `ops` function.
   - `session.rs` — Session struct with command history
   - `errors.rs` — `AppError` enum mapped to HTTP status codes (400/404/410/500)
@@ -58,11 +58,12 @@ The server is a single-binary axum application. Key modules under `server/src/`:
   - `watcher.rs` — `notify-debouncer-mini` filesystem watcher; re-indexes changed files
   - `file_entry.rs` — `FileEntry` struct (path, size, language, definition, mark)
 - **`symbols/`** — Symbol extraction
-  - `mod.rs` — `SymbolTable` with DashMap primary store keyed by `"file::name"` and secondary indices by name and file
+  - `mod.rs` — `SymbolTable` with DashMap primary store keyed by `"file::name"`, secondary indices by name/file, and an **inverted index** (`id_refs`) for O(1) caller/test discovery.
   - `symbol.rs` — `Symbol` struct and `SymbolKind` enum
   - `parser.rs` — Runs tree-sitter on files, dispatches to per-language queries
   - `queries/` — Tree-sitter query strings per language: symbols, callers (call-expression), variables (local bindings) for Rust, Python, TypeScript, Go (JS reuses TS base)
 - **`ops/`** — Business logic called by route handlers
+  - `stats.rs` — Global and per-project statistics (uptime, cache hit rates, counts)
   - `structure.rs` — File tree rendering, define/redefine/mark
   - `symbol_ops.rs` — Symbol list/search/implementation/callers (AST-aware)/tests/variables (AST-aware)
   - `content.rs` — peek, grep (with scope-aware filtering), chunk_indices
@@ -79,7 +80,7 @@ The server is a single-binary axum application. Key modules under `server/src/`:
 
 ### Concurrency model
 
-All shared state uses `DashMap` (lock-free concurrent hashmap). The `Project.last_active` timestamp uses `parking_lot::Mutex`. Multiple sessions can read/annotate the same project concurrently. Symbol extraction runs on `tokio::spawn`, grep runs on `tokio::task::spawn_blocking`.
+All shared state uses `DashMap` (lock-free concurrent hashmap). The `Project.last_active` timestamp uses `parking_lot::Mutex`. Multiple sessions can read/annotate the same project concurrently. Symbol extraction is parallelized via `rayon` on `tokio::task::spawn_blocking`. Grep also runs on `tokio::task::spawn_blocking`.
 
 ## API
 

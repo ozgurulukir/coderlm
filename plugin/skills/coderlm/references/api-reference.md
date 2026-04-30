@@ -17,6 +17,9 @@ python3 cli init [--cwd /path/to/project] [--port 3000]
 # Server + session status
 python3 cli status
 
+# Global server stats (CPU, memory, cache hit rates)
+python3 cli stats
+
 # Delete session
 python3 cli cleanup
 ```
@@ -39,10 +42,10 @@ python3 cli mark tests/integration.rs test
 
 ```bash
 # List symbols (filter by kind, file, or both)
-python3 cli symbols [--kind function] [--file src/main.rs] [--limit 50]
+python3 cli symbols [--kind function] [--file src/main.rs] [--limit 50] [--cursor "C"]
 
 # Search symbols by name substring
-python3 cli search "handler" [--limit 20]
+python3 cli search "handler" [--limit 20] [--cursor "C"]
 
 # Get full source code of a symbol
 python3 cli impl run_server --file src/main.rs
@@ -109,6 +112,7 @@ python3 cli history [--limit 50]
 ```json
 {
   "count": 3,
+  "next_cursor": "src/main.rs::69::run_server",
   "symbols": [
     {
       "name": "run_server",
@@ -213,6 +217,29 @@ Same shape as symbols response.
   "projects": 2,
   "active_sessions": 3,
   "max_projects": 5
+}
+```
+
+### stats
+```json
+{
+  "status": "ok",
+  "uptime": "3600s",
+  "active_sessions": 3,
+  "total_projects": 2,
+  "projects": [
+    {
+      "path": "/path/to/project",
+      "files": 42,
+      "symbols": 150,
+      "cache": {
+        "hits": 120,
+        "misses": 30,
+        "hit_rate": "80.00%",
+        "total_bytes": 1048576
+      }
+    }
+  ]
 }
 ```
 

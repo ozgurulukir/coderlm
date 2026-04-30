@@ -1,0 +1,10 @@
+{
+  "name": "coderlm",
+  "version": "0.1.5",
+  "description": "Tree-sitter backed code indexing and retrieval for Claude Code / Oh My Pi.",
+  "author": "JaredStewart",
+  "license": "MIT",
+  "claude-plugin": {
+    "manifest": ".claude-plugin/plugin.json"
+  }
+}

@@ -20,6 +20,7 @@ python3 .claude/coderlm_state/coderlm_cli.py init
 CLI=".claude/coderlm_state/coderlm_cli.py"
 
 python3 $CLI structure                          # File tree + module overview
+python3 $CLI stats                              # Server status + cache hit rates
 python3 $CLI search "symbol_name"               # Find symbols by name
 python3 $CLI impl function_name --file path     # Get exact implementation
 python3 $CLI callers function_name --file path  # Who calls this function?

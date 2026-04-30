@@ -8,9 +8,9 @@ An integrated Claude Code skill (`plugin/skills/coderlm/`) wraps the API with a 
 
 The RLM pattern treats a codebase as external data that a root language model can recursively examine and decompose:
 
-1. **Index** — The server walks the project directory (respecting `.gitignore`), parses every supported file with tree-sitter, and builds a symbol table with cross-references.
-2. **Query** — The agent queries the index: search symbols by name, list functions in a file, find callers of a function, grep for patterns, retrieve exact source code.
-3. **Read** — The server returns the exact code requested — full function implementations, variable lists, line ranges — so the agent never guesses.
+1. **Index** — The server walks the project directory (respecting `.gitignore`), parses every supported file with tree-sitter, and builds a symbol table with cross-references. Extraction is parallelized for speed.
+12qp|2. **Query** — The agent queries the index: search symbols by name, list functions in a file, find callers of a function, grep for patterns, retrieve exact source code. Uses an inverted index for O(1) caller/test discovery.
+13md|3. **Read** — The server returns the exact code requested — full function implementations, variable lists, line ranges — so the agent never guesses. Results are cached and paginated.
 
 This replaces the typical glob/grep/read cycle with precise, index-backed lookups.
 
@@ -117,7 +117,9 @@ Once the server is running, invoke the skill (Claude Code) or use the CLI direct
 
 # Direct CLI usage
 python3 plugin/skills/coderlm/scripts/coderlm_cli.py init
+python3 plugin/skills/coderlm/scripts/coderlm_cli.py stats
 python3 plugin/skills/coderlm/scripts/coderlm_cli.py search "handler"
+python3 plugin/skills/coderlm/scripts/coderlm_cli.py symbols --limit 50 --cursor "..."
 python3 plugin/skills/coderlm/scripts/coderlm_cli.py impl run_server --file src/main.rs
 ```
 

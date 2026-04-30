@@ -25,7 +25,7 @@ Usage:
   python3 coderlm_cli.py load-annotations
   python3 coderlm_cli.py history [--limit N]
   python3 coderlm_cli.py status
-  python3 coderlm_cli.py cleanup
+  python3 coderlm_cli.py stats
 """
 
 from __future__ import annotations
@@ -219,6 +219,8 @@ def cmd_symbols(args: argparse.Namespace) -> None:
         params["file"] = args.file
     if args.limit is not None:
         params["limit"] = args.limit
+    if args.cursor:
+        params["cursor"] = args.cursor
     _output(_get(state, "/symbols", params))
 
 
@@ -227,6 +229,8 @@ def cmd_search(args: argparse.Namespace) -> None:
     params = {"q": args.query}
     if args.limit is not None:
         params["limit"] = args.limit
+    if args.cursor:
+        params["cursor"] = args.cursor
     _output(_get(state, "/symbols/search", params))
 
 
@@ -363,6 +367,14 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
     print(f"Session {sid} deleted.")
 
 
+def cmd_stats(args: argparse.Namespace) -> None:
+    """Get server and project stats without requiring a session."""
+    host = args.host or "127.0.0.1"
+    port = args.port or 3000
+    base = f"http://{host}:{port}/api/v1"
+    _output(_request("GET", f"{base}/stats"))
+
+
 # ── Parser ────────────────────────────────────────────────────────────
 
 
@@ -397,12 +409,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_sym.add_argument("--kind", help="Filter: function, method, class, struct, enum, trait, interface, constant, type, module")
     p_sym.add_argument("--file", help="Filter by file path")
     p_sym.add_argument("--limit", type=int, default=None)
+    p_sym.add_argument("--cursor", help="Pagination cursor from previous response next_cursor field")
     p_sym.set_defaults(func=cmd_symbols)
 
     # search
     p_search = sub.add_parser("search", help="Search symbols by name")
     p_search.add_argument("query", help="Search term")
     p_search.add_argument("--limit", type=int, default=None)
+    p_search.add_argument("--cursor", help="Pagination cursor from previous response next_cursor field")
     p_search.set_defaults(func=cmd_search)
 
     # impl
@@ -503,6 +517,12 @@ def build_parser() -> argparse.ArgumentParser:
     # cleanup
     p_clean = sub.add_parser("cleanup", help="Delete the current session")
     p_clean.set_defaults(func=cmd_cleanup)
+
+    # stats
+    p_stats = sub.add_parser("stats", help="Show server stats (projects, cache hit rates, uptime)")
+    p_stats.add_argument("--host", default=None)
+    p_stats.add_argument("--port", type=int, default=None)
+    p_stats.set_defaults(func=cmd_stats)
 
     return p
 

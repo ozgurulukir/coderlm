@@ -1,10 +1,12 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::index::file_tree::FileTree;
 use crate::index::{walker, watcher};
@@ -12,11 +14,98 @@ use crate::server::errors::AppError;
 use crate::server::session::Session;
 use crate::symbols::{parser, SymbolTable};
 
+/// Simple LRU-ish file content cache to avoid redundant disk I/O.
+pub struct FileCache {
+    cache: Mutex<HashMap<String, Arc<str>>>,
+    pub total_bytes: Mutex<usize>,
+    pub max_bytes: usize,
+    pub hits: AtomicU64,
+    pub misses: AtomicU64,
+}
+
+impl FileCache {
+    pub fn new(max_bytes: usize) -> Self {
+        Self {
+            cache: Mutex::new(HashMap::new()),
+            total_bytes: Mutex::new(0),
+            max_bytes,
+            hits: AtomicU64::new(0),
+            misses: AtomicU64::new(0),
+        }
+    }
+
+    pub fn get_or_read(&self, abs_path: &Path, rel_path: &str) -> Result<Arc<str>, AppError> {
+        {
+            let cache = self.cache.lock();
+            if let Some(content) = cache.get(rel_path) {
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                return Ok(content.clone());
+            }
+        }
+
+        self.misses.fetch_add(1, Ordering::Relaxed);
+        let content_raw = std::fs::read_to_string(abs_path)
+            .map_err(|e| AppError::NotFound(format!("Failed to read {}: {}", rel_path, e)))?;
+        let content: Arc<str> = Arc::from(content_raw);
+        let bytes = content.len();
+
+        let mut cache = self.cache.lock();
+        let mut total = self.total_bytes.lock();
+
+        // If this single file is larger than the cache, don't cache it
+        if bytes > self.max_bytes {
+            return Ok(content);
+        }
+
+        // Simple eviction: clear entire cache if over capacity
+        if *total + bytes > self.max_bytes {
+            debug!("File cache over capacity ({} bytes), clearing", *total);
+            cache.clear();
+            *total = 0;
+        }
+
+        cache.insert(rel_path.to_string(), content.clone());
+        *total += bytes;
+
+        Ok(content)
+    }
+
+    pub fn invalidate(&self, rel_path: &str) {
+        let mut cache = self.cache.lock();
+        if let Some(removed) = cache.remove(rel_path) {
+            let mut total = self.total_bytes.lock();
+            *total = total.saturating_sub(removed.len());
+            debug!("Invalidated {} in file cache", rel_path);
+        }
+    }
+}
+
+/// Cache for tree-sitter parse trees to avoid redundant parsing.
+pub struct ParseCache {
+    pub trees: Mutex<HashMap<String, (tree_sitter::Tree, usize)>>, // (tree, source_len)
+}
+
+impl ParseCache {
+    pub fn new() -> Self {
+        Self {
+            trees: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn invalidate(&self, rel_path: &str) {
+        let mut trees = self.trees.lock();
+        trees.remove(rel_path);
+        debug!("Invalidated {} in parse cache", rel_path);
+    }
+}
+
 /// A single indexed project with its own file tree, symbol table, and watcher.
 pub struct Project {
     pub root: PathBuf,
     pub file_tree: Arc<FileTree>,
     pub symbol_table: Arc<SymbolTable>,
+    pub file_cache: Arc<FileCache>,
+    pub parse_cache: Arc<ParseCache>,
     // Held alive to keep the filesystem watcher running; dropped on eviction.
     #[allow(dead_code)]
     pub watcher: Option<watcher::WatcherHandle>,
@@ -34,6 +123,7 @@ pub struct AppStateInner {
     pub sessions: DashMap<String, Session>,
     pub max_projects: usize,
     pub max_file_size: u64,
+    pub start_time: DateTime<Utc>,
 }
 
 impl AppState {
@@ -44,6 +134,7 @@ impl AppState {
                 sessions: DashMap::new(),
                 max_projects,
                 max_file_size,
+                start_time: Utc::now(),
             }),
         }
     }
@@ -75,6 +166,8 @@ impl AppState {
         // Scan directory
         let file_tree = Arc::new(FileTree::new());
         let symbol_table = Arc::new(SymbolTable::new());
+        let file_cache = Arc::new(FileCache::new(50 * 1024 * 1024)); // 50 MB
+        let parse_cache = Arc::new(ParseCache::new());
         let max_file_size = self.inner.max_file_size;
 
         info!("Indexing new project: {}", canonical.display());
@@ -88,6 +181,8 @@ impl AppState {
             &canonical,
             file_tree.clone(),
             symbol_table.clone(),
+            file_cache.clone(),
+            parse_cache.clone(),
             max_file_size,
         )
         .ok();
@@ -96,6 +191,8 @@ impl AppState {
             root: canonical.clone(),
             file_tree: file_tree.clone(),
             symbol_table: symbol_table.clone(),
+            file_cache,
+            parse_cache,
             watcher: watcher_handle,
             last_active: Mutex::new(Utc::now()),
         });

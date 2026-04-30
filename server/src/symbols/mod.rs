@@ -15,6 +15,9 @@ pub struct SymbolTable {
     pub by_name: DashMap<String, HashSet<String>>,
     /// Secondary index: file path -> set of primary keys
     pub by_file: DashMap<String, HashSet<String>>,
+    /// Inverted index: identifier name -> set of file paths containing it.
+    /// Used to quickly narrow down files for caller/test discovery.
+    pub id_refs: DashMap<String, HashSet<String>>,
 }
 
 impl SymbolTable {
@@ -23,6 +26,7 @@ impl SymbolTable {
             symbols: DashMap::new(),
             by_name: DashMap::new(),
             by_file: DashMap::new(),
+            id_refs: DashMap::new(),
         }
     }
 
@@ -46,6 +50,13 @@ impl SymbolTable {
         self.symbols.insert(key, symbol);
     }
 
+    pub fn insert_id_ref(&self, id: String, file: String) {
+        self.id_refs
+            .entry(id)
+            .or_insert_with(HashSet::new)
+            .insert(file);
+    }
+
     pub fn remove_file(&self, file: &str) {
         if let Some((_, keys)) = self.by_file.remove(file) {
             for key in &keys {
@@ -60,6 +71,15 @@ impl SymbolTable {
                 }
             }
         }
+        
+        // Remove file from id_refs (expensive but necessary for correctness on file deletion)
+        // We iterate over all entries because id_refs is keyed by identifier, not file.
+        // In a real-world high-perf system, we'd keep a reverse by_file_ids index too.
+        // For now, let's keep it simple.
+        self.id_refs.retain(|_, files| {
+            files.remove(file);
+            !files.is_empty()
+        });
     }
 
     pub fn get(&self, file: &str, name: &str) -> Option<Symbol> {
@@ -68,17 +88,27 @@ impl SymbolTable {
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<Symbol> {
-        let query_lower = query.to_lowercase();
-        let mut results = Vec::new();
-        for entry in self.symbols.iter() {
-            if entry.value().name.to_lowercase().contains(&query_lower) {
-                results.push(entry.value().clone());
-                if results.len() >= limit {
-                    break;
-                }
-            }
-        }
-        results
+        use fuzzy_matcher::clangd::ClangdMatcher;
+        use fuzzy_matcher::FuzzyMatcher;
+        use rayon::prelude::*;
+
+        let matcher = ClangdMatcher::default();
+
+        let mut ranked_results: Vec<(i64, Symbol)> = self.symbols
+            .par_iter()
+            .filter_map(|entry| {
+                matcher.fuzzy_match(&entry.value().name, query)
+                    .map(|score| (score, entry.value().clone()))
+            })
+            .collect();
+
+        // Sort by score descending
+        ranked_results.sort_by(|a, b| b.0.cmp(&a.0));
+
+        ranked_results.into_iter()
+            .take(limit)
+            .map(|(_, sym)| sym)
+            .collect()
     }
 
     pub fn list_by_file(&self, file: &str) -> Vec<Symbol> {
