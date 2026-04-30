@@ -39,8 +39,7 @@ pub fn get_parse_tree(
     let tree = parser.parse(source, None)
         .ok_or_else(|| anyhow::anyhow!("Failed to parse {}", rel_path))?;
 
-    let mut trees = parse_cache.trees.lock();
-    trees.insert(rel_path.to_string(), (tree.clone(), source.len()));
+    parse_cache.insert(rel_path.to_string(), tree.clone(), source.len());
     Ok(tree)
 }
 

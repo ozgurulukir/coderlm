@@ -83,13 +83,24 @@ impl FileCache {
 /// Cache for tree-sitter parse trees to avoid redundant parsing.
 pub struct ParseCache {
     pub trees: Mutex<HashMap<String, (tree_sitter::Tree, usize)>>, // (tree, source_len)
+    pub max_entries: usize,
 }
 
 impl ParseCache {
-    pub fn new() -> Self {
+    pub fn new(max_entries: usize) -> Self {
         Self {
             trees: Mutex::new(HashMap::new()),
+            max_entries,
         }
+    }
+
+    pub fn insert(&self, rel_path: String, tree: tree_sitter::Tree, len: usize) {
+        let mut trees = self.trees.lock();
+        if trees.len() >= self.max_entries {
+            debug!("Parse cache full ({} entries), clearing", trees.len());
+            trees.clear();
+        }
+        trees.insert(rel_path, (tree, len));
     }
 
     pub fn invalidate(&self, rel_path: &str) {
@@ -167,7 +178,7 @@ impl AppState {
         let file_tree = Arc::new(FileTree::new());
         let symbol_table = Arc::new(SymbolTable::new());
         let file_cache = Arc::new(FileCache::new(50 * 1024 * 1024)); // 50 MB
-        let parse_cache = Arc::new(ParseCache::new());
+        let parse_cache = Arc::new(ParseCache::new(200)); // 200 trees
         let max_file_size = self.inner.max_file_size;
 
         info!("Indexing new project: {}", canonical.display());

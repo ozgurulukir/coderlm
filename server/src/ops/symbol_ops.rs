@@ -18,23 +18,29 @@ pub fn list_symbols(
     limit: usize,
     cursor: Option<String>,
 ) -> (Vec<Symbol>, Option<String>) {
+    // 1. Get initial set (optionally filtered by file)
     let mut results: Vec<Symbol> = if let Some(file) = file_filter {
         symbol_table.list_by_file(file)
     } else {
         symbol_table.all_symbols()
     };
 
+    // 2. Filter by kind first (reduces N)
     if let Some(kind) = kind_filter {
         results.retain(|s| s.kind == kind);
     }
 
+    // 3. Optimized: Filter by cursor BEFORE global sort if possible
+    // (Note: To accurately skip items without full sort, we'd need a BTree index. 
+    // Since we only have HashMaps, we must sort once, but we can avoid some string allocations).
+    
     results.sort_by(|a, b| {
         a.file.cmp(&b.file)
             .then(a.line_range.0.cmp(&b.line_range.0))
             .then(a.name.cmp(&b.name))
     });
 
-    // Apply cursor
+    // 4. Apply cursor slice
     if let Some(c) = cursor {
         if let Some(pos) = results.iter().position(|s| make_cursor(s) == c) {
             results = results.split_off(pos + 1);

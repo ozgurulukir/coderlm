@@ -18,6 +18,9 @@ pub struct SymbolTable {
     /// Inverted index: identifier name -> set of file paths containing it.
     /// Used to quickly narrow down files for caller/test discovery.
     pub id_refs: DashMap<String, HashSet<String>>,
+    /// Reverse mapping: file path -> set of identifiers in that file.
+    /// Used for O(1) cleanup of id_refs during file removal.
+    pub file_to_ids: DashMap<String, HashSet<String>>,
 }
 
 impl SymbolTable {
@@ -27,6 +30,7 @@ impl SymbolTable {
             by_name: DashMap::new(),
             by_file: DashMap::new(),
             id_refs: DashMap::new(),
+            file_to_ids: DashMap::new(),
         }
     }
 
@@ -52,9 +56,13 @@ impl SymbolTable {
 
     pub fn insert_id_ref(&self, id: String, file: String) {
         self.id_refs
-            .entry(id)
+            .entry(id.clone())
             .or_insert_with(HashSet::new)
-            .insert(file);
+            .insert(file.clone());
+        self.file_to_ids
+            .entry(file)
+            .or_insert_with(HashSet::new)
+            .insert(id);
     }
 
     pub fn remove_file(&self, file: &str) {
@@ -71,15 +79,19 @@ impl SymbolTable {
                 }
             }
         }
-        
-        // Remove file from id_refs (expensive but necessary for correctness on file deletion)
-        // We iterate over all entries because id_refs is keyed by identifier, not file.
-        // In a real-world high-perf system, we'd keep a reverse by_file_ids index too.
-        // For now, let's keep it simple.
-        self.id_refs.retain(|_, files| {
-            files.remove(file);
-            !files.is_empty()
-        });
+
+        // Optimized cleanup of id_refs using file_to_ids
+        if let Some((_, ids)) = self.file_to_ids.remove(file) {
+            for id in ids {
+                if let Some(mut files) = self.id_refs.get_mut(&id) {
+                    files.remove(file);
+                    if files.is_empty() {
+                        drop(files);
+                        self.id_refs.remove(&id);
+                    }
+                }
+            }
+        }
     }
 
     pub fn get(&self, file: &str, name: &str) -> Option<Symbol> {
