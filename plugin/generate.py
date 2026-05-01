@@ -48,7 +48,7 @@ PLATFORMS: dict[str, Platform] = {
         format="mdc",
         mdc_frontmatter=(
             "---\n"
-            "description: CodeRLM - tree-sitter-backed codebase exploration via index server\n"
+            "description: CodeRLM - tree-sitter-backed codebase exploration with paginated results and server stats\n"
             "globs:\n"
             "alwaysApply: true\n"
             "---\n"

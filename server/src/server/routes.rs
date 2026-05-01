@@ -8,7 +8,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::ops::{annotations, content, history, structure, symbol_ops};
+use crate::ops::{annotations, content, history, stats, structure, symbol_ops};
 use crate::server::errors::AppError;
 use crate::server::session::Session;
 use crate::server::state::{AppState, Project};
@@ -57,6 +57,7 @@ pub fn build_routes(state: AppState) -> Router {
     Router::new()
         // Health
         .route("/api/v1/health", get(health))
+        .route("/api/v1/stats", get(get_stats))
         // Admin
         .route("/api/v1/roots", get(list_roots))
         // Sessions
@@ -103,6 +104,10 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "active_sessions": session_count,
         "max_projects": state.inner.max_projects,
     }))
+}
+
+async fn get_stats(State(state): State<AppState>) -> Json<Value> {
+    Json(stats::get_stats(&state))
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +322,7 @@ struct SymbolListQuery {
     kind: Option<String>,
     file: Option<String>,
     limit: Option<usize>,
+    cursor: Option<String>,
 }
 
 async fn list_symbols(
@@ -327,21 +333,27 @@ async fn list_symbols(
     let project = require_project(&state, &headers)?;
     let kind_filter = params.kind.as_deref().and_then(SymbolKind::from_str);
     let limit = params.limit.unwrap_or(100);
-    let results = symbol_ops::list_symbols(
+    let (results, next_cursor) = symbol_ops::list_symbols(
         &project.symbol_table,
         kind_filter,
         params.file.as_deref(),
         limit,
+        params.cursor,
     );
     let preview = format!("{} symbols", results.len());
     record_history(&state, session_id(&headers).as_deref(), "GET", "/symbols", &preview);
-    Ok(Json(json!({ "symbols": results, "count": results.len() })))
+    Ok(Json(json!({ 
+        "symbols": results, 
+        "count": results.len(),
+        "next_cursor": next_cursor
+    })))
 }
 
 #[derive(Deserialize)]
 struct SymbolSearchQuery {
     q: String,
     limit: Option<usize>,
+    cursor: Option<String>,
 }
 
 async fn search_symbols(
@@ -351,10 +363,19 @@ async fn search_symbols(
 ) -> Result<Json<Value>, AppError> {
     let project = require_project(&state, &headers)?;
     let limit = params.limit.unwrap_or(20);
-    let results = symbol_ops::search_symbols(&project.symbol_table, &params.q, limit);
+    let (results, next_cursor) = symbol_ops::search_symbols(
+        &project.symbol_table, 
+        &params.q, 
+        limit,
+        params.cursor,
+    );
     let preview = format!("{} matches for '{}'", results.len(), params.q);
     record_history(&state, session_id(&headers).as_deref(), "GET", "/symbols/search", &preview);
-    Ok(Json(json!({ "symbols": results, "count": results.len() })))
+    Ok(Json(json!({ 
+        "symbols": results, 
+        "count": results.len(),
+        "next_cursor": next_cursor
+    })))
 }
 
 #[derive(Deserialize)]
@@ -413,6 +434,7 @@ async fn get_implementation(
     let source = symbol_ops::get_implementation(
         &project.root,
         &project.symbol_table,
+        &project.file_cache,
         &params.symbol,
         &params.file,
     )
@@ -444,6 +466,7 @@ async fn find_tests(
         &project.root,
         &project.file_tree,
         &project.symbol_table,
+        &project.file_cache,
         &params.symbol,
         &params.file,
         limit,
@@ -472,6 +495,8 @@ async fn find_callers(
         &project.root,
         &project.file_tree,
         &project.symbol_table,
+        &project.file_cache,
+        &project.parse_cache,
         &params.symbol,
         &params.file,
         limit,
@@ -497,6 +522,8 @@ async fn list_variables(
     let vars = symbol_ops::list_variables(
         &project.root,
         &project.symbol_table,
+        &project.file_cache,
+        &project.parse_cache,
         &params.function,
         &params.file,
     )
@@ -528,6 +555,7 @@ async fn peek(
     let result = content::peek(
         &project.root,
         &project.file_tree,
+        &project.file_cache,
         &params.file,
         start,
         end,
@@ -565,10 +593,12 @@ async fn grep_handler(
     // Run grep on a blocking thread since it reads many files
     let root = project.root.clone();
     let file_tree = project.file_tree.clone();
+    let file_cache = project.file_cache.clone();
+    let parse_cache = project.parse_cache.clone();
     let pattern = params.pattern.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        content::grep_with_scope(&root, &file_tree, &pattern, max_matches, context_lines, scope)
+        content::grep_with_scope(&root, &file_tree, &file_cache, &parse_cache, &pattern, max_matches, context_lines, scope)
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
@@ -597,6 +627,7 @@ async fn chunk_indices(
     let result = content::chunk_indices(
         &project.root,
         &project.file_tree,
+        &project.file_cache,
         &params.file,
         size,
         overlap,

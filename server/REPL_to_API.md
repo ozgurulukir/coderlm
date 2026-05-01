@@ -18,6 +18,7 @@ Before using any other operation, the agent creates a session **with the working
 | Create session  | POST   | `/sessions`       | `{ "cwd": "/path/to/project" }` | Indexes project if new; returns `{ session_id, created_at, project }` |
 | Check session   | GET    | `/sessions/:id`   | —             | Returns session info including project path |
 | End session     | DELETE | `/sessions/:id`   | —             | Cleans up history |
+| Server Stats    | GET    | `/stats`          | —             | Global and per-project stats (CPU, cache, uptime) |
 
 ```bash
 # Create — pass the project directory as cwd
@@ -82,11 +83,11 @@ curl -s -X POST -H "X-Session-Id: $SID" -H "Content-Type: application/json" \
 
 ## symbol list
 
-List symbols extracted from the codebase. Defaults to all kinds; filter with query params.
+List symbols extracted from the codebase. Defaults to all kinds; filter with query params. Supports cursor-based pagination.
 
 | REPL operation                  | Method | Endpoint    | Params                                      |
 |---------------------------------|--------|-------------|---------------------------------------------|
-| `symbol list`                   | GET    | `/symbols`  | `?limit=100`                                |
+| `symbol list`                   | GET    | `/symbols`  | `?limit=100&cursor=...`                    |
 | `symbol list` (functions only)  | GET    | `/symbols`  | `?kind=function&limit=100`                  |
 | `symbol list` (single file)     | GET    | `/symbols`  | `?file=src/main.rs&limit=100`               |
 | `symbol list` (combined filter) | GET    | `/symbols`  | `?kind=function&file=src/main.rs&limit=100` |
@@ -100,6 +101,7 @@ List symbols extracted from the codebase. Defaults to all kinds; filter with que
 ```json
 {
   "count": 3,
+  "next_cursor": "src/main.rs::142::run_server",
   "symbols": [
     {
       "name": "run_server",
@@ -118,11 +120,11 @@ List symbols extracted from the codebase. Defaults to all kinds; filter with que
 
 ## symbol search
 
-Find symbols by name substring.
+Find symbols by name substring. Supports cursor-based pagination.
 
-| REPL operation          | Method | Endpoint          | Params                  |
-|-------------------------|--------|-------------------|-------------------------|
-| `symbol search $query`  | GET    | `/symbols/search` | `?q=handler&limit=20`   |
+| REPL operation          | Method | Endpoint          | Params                         |
+|-------------------------|--------|-------------------|--------------------------------|
+| `symbol search $query`  | GET    | `/symbols/search` | `?q=handler&limit=20&cursor=C` |
 
 ```bash
 curl -s -H "X-Session-Id: $SID" "localhost:3000/api/v1/symbols/search?q=parse&limit=10"
@@ -363,6 +365,44 @@ Retrieve command history. Supports two modes:
       "entries": [
         { "timestamp": "2026-02-07T19:00:55Z", "method": "GET", "path": "/symbols", "response_preview": "42 symbols" }
       ]
+    }
+  ]
+}
+```
+
+---
+
+## stats
+
+Check detailed server statistics. Does not require a session.
+
+| Operation | Method | Endpoint  |
+|-----------|--------|-----------|
+| stats     | GET    | `/stats`  |
+
+```bash
+curl -s localhost:3000/api/v1/stats
+```
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "uptime": "3600s",
+  "active_sessions": 3,
+  "total_projects": 2,
+  "projects": [
+    {
+      "path": "/path/to/project",
+      "files": 42,
+      "symbols": 150,
+      "cache": {
+        "hits": 120,
+        "misses": 30,
+        "hit_rate": "80.00%",
+        "total_bytes": 1048576
+      }
     }
   ]
 }

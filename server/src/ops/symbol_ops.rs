@@ -5,6 +5,8 @@ use tree_sitter::StreamingIterator;
 
 use crate::index::file_entry::Language;
 use crate::index::file_tree::FileTree;
+use crate::server::state::{FileCache, ParseCache};
+use crate::symbols::parser;
 use crate::symbols::queries;
 use crate::symbols::symbol::{Symbol, SymbolKind};
 use crate::symbols::SymbolTable;
@@ -14,29 +16,90 @@ pub fn list_symbols(
     kind_filter: Option<SymbolKind>,
     file_filter: Option<&str>,
     limit: usize,
-) -> Vec<Symbol> {
+    cursor: Option<String>,
+) -> (Vec<Symbol>, Option<String>) {
+    // 1. Get initial set (optionally filtered by file)
     let mut results: Vec<Symbol> = if let Some(file) = file_filter {
         symbol_table.list_by_file(file)
     } else {
         symbol_table.all_symbols()
     };
 
+    // 2. Filter by kind first (reduces N)
     if let Some(kind) = kind_filter {
         results.retain(|s| s.kind == kind);
     }
 
-    results.sort_by(|a, b| a.file.cmp(&b.file).then(a.line_range.0.cmp(&b.line_range.0)));
+    // 3. Optimized: Filter by cursor BEFORE global sort if possible
+    // (Note: To accurately skip items without full sort, we'd need a BTree index. 
+    // Since we only have HashMaps, we must sort once, but we can avoid some string allocations).
+    
+    results.sort_by(|a, b| {
+        a.file.cmp(&b.file)
+            .then(a.line_range.0.cmp(&b.line_range.0))
+            .then(a.name.cmp(&b.name))
+    });
+
+    // 4. Apply cursor slice
+    if let Some(c) = cursor {
+        if let Some(pos) = results.iter().position(|s| make_cursor(s) == c) {
+            results = results.split_off(pos + 1);
+        }
+    }
+
+    let has_more = results.len() > limit;
     results.truncate(limit);
-    results
+
+    let next_cursor = if has_more {
+        results.last().map(make_cursor)
+    } else {
+        None
+    };
+
+    (results, next_cursor)
 }
 
-pub fn search_symbols(symbol_table: &Arc<SymbolTable>, query: &str, limit: usize) -> Vec<Symbol> {
-    symbol_table.search(query, limit)
+pub fn search_symbols(
+    symbol_table: &Arc<SymbolTable>, 
+    query: &str, 
+    limit: usize,
+    cursor: Option<String>,
+) -> (Vec<Symbol>, Option<String>) {
+    let mut results = symbol_table.search(query, 1000); // Get more candidates
+    
+    results.sort_by(|a, b| {
+        a.file.cmp(&b.file)
+            .then(a.line_range.0.cmp(&b.line_range.0))
+            .then(a.name.cmp(&b.name))
+    });
+
+    // Apply cursor
+    if let Some(c) = cursor {
+        if let Some(pos) = results.iter().position(|s| make_cursor(s) == c) {
+            results = results.split_off(pos + 1);
+        }
+    }
+
+    let has_more = results.len() > limit;
+    results.truncate(limit);
+
+    let next_cursor = if has_more {
+        results.last().map(make_cursor)
+    } else {
+        None
+    };
+
+    (results, next_cursor)
+}
+
+fn make_cursor(s: &Symbol) -> String {
+    format!("{}::{}::{}", s.file, s.line_range.0, s.name)
 }
 
 pub fn get_implementation(
     root: &Path,
     symbol_table: &Arc<SymbolTable>,
+    file_cache: &Arc<FileCache>,
     symbol_name: &str,
     file: &str,
 ) -> Result<String, String> {
@@ -45,8 +108,9 @@ pub fn get_implementation(
         .ok_or_else(|| format!("Symbol '{}' not found in '{}'", symbol_name, file))?;
 
     let abs_path = root.join(&sym.file);
-    let source = std::fs::read_to_string(&abs_path)
-        .map_err(|e| format!("Failed to read '{}': {}", sym.file, e))?;
+    let source = file_cache
+        .get_or_read(&abs_path, &sym.file)
+        .map_err(|e| e.to_string())?;
 
     let start = sym.byte_range.0;
     let end = sym.byte_range.1.min(source.len());
@@ -95,6 +159,8 @@ pub fn find_callers(
     root: &Path,
     file_tree: &Arc<FileTree>,
     symbol_table: &Arc<SymbolTable>,
+    file_cache: &Arc<FileCache>,
+    parse_cache: &Arc<ParseCache>,
     symbol_name: &str,
     file: &str,
     limit: usize,
@@ -106,18 +172,36 @@ pub fn find_callers(
 
     let mut callers = Vec::new();
 
-    for entry in file_tree.files.iter() {
-        let rel_path = entry.key().clone();
-        let language = entry.value().language;
+    // Get candidate files from inverted index
+    let mut candidate_files: Vec<String> = symbol_table
+        .id_refs
+        .get(symbol_name)
+        .map(|r| r.value().iter().cloned().collect())
+        .unwrap_or_default();
+    
+    // Also check the definition file itself (index might not include it if not called elsewhere)
+    if !candidate_files.contains(&file.to_string()) {
+        candidate_files.push(file.to_string());
+    }
+    
+    candidate_files.sort();
+
+    for rel_path in candidate_files {
+        let entry = match file_tree.files.get(&rel_path) {
+            Some(e) => e,
+            None => continue,
+        };
+        
+        let language = entry.language;
         let abs_path = root.join(&rel_path);
 
-        let source = match std::fs::read_to_string(&abs_path) {
+        let source = match file_cache.get_or_read(&abs_path, &rel_path) {
             Ok(s) => s,
             Err(_) => continue,
         };
 
         let file_callers = if language.has_tree_sitter_support() {
-            find_callers_ast(&source, &rel_path, language, symbol_name, file)
+            find_callers_ast(&source, &rel_path, language, parse_cache, symbol_name, file)
         } else {
             find_callers_regex(&source, &rel_path, symbol_name, file)
         };
@@ -139,6 +223,7 @@ fn find_callers_ast(
     source: &str,
     rel_path: &str,
     language: Language,
+    parse_cache: &ParseCache,
     symbol_name: &str,
     definition_file: &str,
 ) -> Vec<CallerInfo> {
@@ -147,14 +232,9 @@ fn find_callers_ast(
         None => return find_callers_regex(source, rel_path, symbol_name, definition_file),
     };
 
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&config.language).is_err() {
-        return find_callers_regex(source, rel_path, symbol_name, definition_file);
-    }
-
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => return find_callers_regex(source, rel_path, symbol_name, definition_file),
+    let tree = match parser::get_parse_tree(rel_path, source, language, parse_cache) {
+        Ok(t) => t,
+        Err(_) => return find_callers_regex(source, rel_path, symbol_name, definition_file),
     };
 
     let query = match tree_sitter::Query::new(&config.language, config.callers_query) {
@@ -290,6 +370,7 @@ pub fn find_tests(
     root: &Path,
     _file_tree: &Arc<FileTree>,
     symbol_table: &Arc<SymbolTable>,
+    file_cache: &Arc<FileCache>,
     symbol_name: &str,
     file: &str,
     limit: usize,
@@ -300,34 +381,51 @@ pub fn find_tests(
 
     let mut tests = Vec::new();
 
-    // Look through all symbols for test functions
-    for entry in symbol_table.symbols.iter() {
-        let sym = entry.value();
-        if !is_test_symbol(sym) {
-            continue;
-        }
+    // Get candidate files from inverted index
+    let mut candidate_files: Vec<String> = symbol_table
+        .id_refs
+        .get(symbol_name)
+        .map(|r| r.value().iter().cloned().collect())
+        .unwrap_or_default();
+    
+    // Also check the definition file itself
+    if !candidate_files.contains(&file.to_string()) {
+        candidate_files.push(file.to_string());
+    }
+    
+    candidate_files.sort();
 
-        // Read the test function body and check if it references the target symbol
-        let abs_path = root.join(&sym.file);
-        let source = match std::fs::read_to_string(&abs_path) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
+    for rel_path in candidate_files {
+        // Look through symbols in this file to see if any are tests
+        let file_symbols = symbol_table.list_by_file(&rel_path);
+        
+        for sym in file_symbols {
+            if !is_test_symbol(&sym) {
+                continue;
+            }
 
-        let start = sym.byte_range.0;
-        let end = sym.byte_range.1.min(source.len());
-        let body = &source[start..end];
+            // Read the test function body and check if it references the target symbol
+            let abs_path = root.join(&sym.file);
+            let source = match file_cache.get_or_read(&abs_path, &sym.file) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
 
-        if body.contains(symbol_name) {
-            tests.push(TestInfo {
-                name: sym.name.clone(),
-                file: sym.file.clone(),
-                line: sym.line_range.0,
-                signature: sym.signature.clone(),
-            });
+            let start = sym.byte_range.0;
+            let end = sym.byte_range.1.min(source.len());
+            let body = &source[start..end];
 
-            if tests.len() >= limit {
-                break;
+            if body.contains(symbol_name) {
+                tests.push(TestInfo {
+                    name: sym.name.clone(),
+                    file: sym.file.clone(),
+                    line: sym.line_range.0,
+                    signature: sym.signature.clone(),
+                });
+
+                if tests.len() >= limit {
+                    return Ok(tests);
+                }
             }
         }
     }
@@ -377,6 +475,8 @@ pub struct TestInfo {
 pub fn list_variables(
     root: &Path,
     symbol_table: &Arc<SymbolTable>,
+    file_cache: &Arc<FileCache>,
+    parse_cache: &Arc<ParseCache>,
     function_name: &str,
     file: &str,
 ) -> Result<Vec<VariableInfo>, String> {
@@ -385,14 +485,15 @@ pub fn list_variables(
         .ok_or_else(|| format!("Symbol '{}' not found in '{}'", function_name, file))?;
 
     let abs_path = root.join(&sym.file);
-    let source = std::fs::read_to_string(&abs_path)
-        .map_err(|e| format!("Failed to read '{}': {}", sym.file, e))?;
+    let source = file_cache
+        .get_or_read(&abs_path, &sym.file)
+        .map_err(|e| e.to_string())?;
 
     let start = sym.byte_range.0;
     let end = sym.byte_range.1.min(source.len());
 
     let variables = if sym.language.has_tree_sitter_support() {
-        list_variables_ast(&source, sym.language, start, end, function_name)
+        list_variables_ast(&source, &sym.file, sym.language, parse_cache, start, end, function_name)
     } else {
         list_variables_regex(&source[start..end], sym.language, function_name)
     };
@@ -404,7 +505,9 @@ pub fn list_variables(
 /// variables query, and collect all @var.name captures within the byte range.
 fn list_variables_ast(
     source: &str,
+    rel_path: &str,
     language: Language,
+    parse_cache: &ParseCache,
     fn_start: usize,
     fn_end: usize,
     function_name: &str,
@@ -414,14 +517,9 @@ fn list_variables_ast(
         None => return list_variables_regex(&source[fn_start..fn_end], language, function_name),
     };
 
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&config.language).is_err() {
-        return list_variables_regex(&source[fn_start..fn_end], language, function_name);
-    }
-
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => return list_variables_regex(&source[fn_start..fn_end], language, function_name),
+    let tree = match parser::get_parse_tree(rel_path, source, language, parse_cache) {
+        Ok(t) => t,
+        Err(_) => return list_variables_regex(&source[fn_start..fn_end], language, function_name),
     };
 
     let query = match tree_sitter::Query::new(&config.language, config.variables_query) {

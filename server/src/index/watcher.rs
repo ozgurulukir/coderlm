@@ -9,6 +9,7 @@ use tracing::{debug, info, warn};
 use crate::config;
 use crate::index::file_entry::FileEntry;
 use crate::index::file_tree::FileTree;
+use crate::server::state::{FileCache, ParseCache};
 use crate::symbols::parser::extract_symbols_from_file;
 use crate::symbols::SymbolTable;
 
@@ -18,6 +19,8 @@ pub fn start_watcher(
     root: &Path,
     file_tree: Arc<FileTree>,
     symbol_table: Arc<SymbolTable>,
+    file_cache: Arc<FileCache>,
+    parse_cache: Arc<ParseCache>,
     max_file_size: u64,
 ) -> Result<WatcherHandle> {
     let root_buf = root.to_path_buf();
@@ -32,6 +35,8 @@ pub fn start_watcher(
                         &root_for_handler,
                         &file_tree,
                         &symbol_table,
+                        &file_cache,
+                        &parse_cache,
                         max_file_size,
                         events,
                     );
@@ -62,6 +67,8 @@ fn handle_events(
     root: &PathBuf,
     file_tree: &Arc<FileTree>,
     symbol_table: &Arc<SymbolTable>,
+    file_cache: &Arc<FileCache>,
+    parse_cache: &Arc<ParseCache>,
     max_file_size: u64,
     events: Vec<notify_debouncer_mini::DebouncedEvent>,
 ) {
@@ -82,9 +89,9 @@ fn handle_events(
         match event.kind {
             DebouncedEventKind::Any => {
                 if path.is_file() {
-                    handle_file_change(root, file_tree, symbol_table, max_file_size, &rel_path, path);
+                    handle_file_change(root, file_tree, symbol_table, file_cache, parse_cache, max_file_size, &rel_path, path);
                 } else if !path.exists() {
-                    handle_file_delete(file_tree, symbol_table, &rel_path);
+                    handle_file_delete(file_tree, symbol_table, file_cache, parse_cache, &rel_path);
                 }
             }
             DebouncedEventKind::AnyContinuous => {
@@ -99,10 +106,16 @@ fn handle_file_change(
     root: &PathBuf,
     file_tree: &Arc<FileTree>,
     symbol_table: &Arc<SymbolTable>,
+    file_cache: &Arc<FileCache>,
+    parse_cache: &Arc<ParseCache>,
     max_file_size: u64,
     rel_path: &str,
     abs_path: &Path,
 ) {
+    // Invalidate caches
+    file_cache.invalidate(rel_path);
+    parse_cache.invalidate(rel_path);
+
     // Check extension-based ignoring
     if config::should_ignore_extension(rel_path) {
         return;
@@ -128,14 +141,16 @@ fn handle_file_change(
     let language = entry.language;
     file_tree.insert(entry);
 
-    // Re-extract symbols
     symbol_table.remove_file(rel_path);
     if language.has_tree_sitter_support() {
         match extract_symbols_from_file(root, rel_path, language) {
-            Ok(symbols) => {
+            Ok((symbols, refs)) => {
                 let count = symbols.len();
                 for sym in symbols {
                     symbol_table.insert(sym);
+                }
+                for r in refs {
+                    symbol_table.insert_id_ref(r, rel_path.to_string());
                 }
                 if let Some(mut entry) = file_tree.files.get_mut(rel_path) {
                     entry.symbols_extracted = true;
@@ -152,8 +167,12 @@ fn handle_file_change(
 fn handle_file_delete(
     file_tree: &Arc<FileTree>,
     symbol_table: &Arc<SymbolTable>,
+    file_cache: &Arc<FileCache>,
+    parse_cache: &Arc<ParseCache>,
     rel_path: &str,
 ) {
+    file_cache.invalidate(rel_path);
+    parse_cache.invalidate(rel_path);
     if file_tree.remove(rel_path).is_some() {
         symbol_table.remove_file(rel_path);
         debug!("Removed {} from index", rel_path);

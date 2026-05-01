@@ -45,8 +45,8 @@ python3 {{CLI_PATH}} structure --depth 2     # File tree with language breakdown
 ### Finding Code
 
 ```bash
-python3 {{CLI_PATH}} search "symbol_name" --limit 20     # Find symbols by name (index lookup)
-python3 {{CLI_PATH}} symbols --kind function --file path  # List all functions in a file
+python3 {{CLI_PATH}} search "symbol_name" --limit 20 [--cursor "C"]     # Find symbols by name (index lookup)
+python3 {{CLI_PATH}} symbols --kind function --file path [--cursor "C"] # List all functions in a file
 python3 {{CLI_PATH}} grep "pattern" --max-matches 20      # Scope-aware pattern search
 python3 {{CLI_PATH}} grep "pattern" --scope code           # Skip matches in comments/strings
 ```
@@ -86,6 +86,7 @@ Annotations persist across queries within a session. Use `save-annotations` to p
 
 ```bash
 python3 {{CLI_PATH}} cleanup                               # End session
+python3 {{CLI_PATH}} stats                                 # Show server status + cache metrics
 ```
 
 ## Workflow
@@ -112,6 +113,7 @@ Steps 3-7 repeat. A typical exploration is: find a symbol -> read its implementa
 | Find what calls a function | `callers` | Cross-project search with exact call sites |
 | Find tests for a function | `tests` | By symbol reference, not filename guessing |
 | Get project overview | `structure` | Tree with file counts and language breakdown |
+| Check server health | `stats` | View cache hit rates and project metrics |
 | Read an entire small file | Native read | When you genuinely need the whole file |
 
 **Default to the server.** Use native file reading only when you need an entire file or the server is unavailable.

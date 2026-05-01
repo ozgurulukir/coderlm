@@ -35,11 +35,13 @@ tree-sitter-scala = "0.24"
 tree-sitter-vue-updated = "0.1"
 
 # Concurrency
-dashmap = "6"
+dashmap = { version = "6", features = ["rayon"] }
 parking_lot = "0.12"
+rayon = "1"
 
 # Search
 regex = "1"
+fuzzy-matcher = "0.3"
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }

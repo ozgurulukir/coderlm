@@ -15,6 +15,12 @@ pub struct SymbolTable {
     pub by_name: DashMap<String, HashSet<String>>,
     /// Secondary index: file path -> set of primary keys
     pub by_file: DashMap<String, HashSet<String>>,
+    /// Inverted index: identifier name -> set of file paths containing it.
+    /// Used to quickly narrow down files for caller/test discovery.
+    pub id_refs: DashMap<String, HashSet<String>>,
+    /// Reverse mapping: file path -> set of identifiers in that file.
+    /// Used for O(1) cleanup of id_refs during file removal.
+    pub file_to_ids: DashMap<String, HashSet<String>>,
 }
 
 impl SymbolTable {
@@ -23,6 +29,8 @@ impl SymbolTable {
             symbols: DashMap::new(),
             by_name: DashMap::new(),
             by_file: DashMap::new(),
+            id_refs: DashMap::new(),
+            file_to_ids: DashMap::new(),
         }
     }
 
@@ -46,6 +54,17 @@ impl SymbolTable {
         self.symbols.insert(key, symbol);
     }
 
+    pub fn insert_id_ref(&self, id: String, file: String) {
+        self.id_refs
+            .entry(id.clone())
+            .or_insert_with(HashSet::new)
+            .insert(file.clone());
+        self.file_to_ids
+            .entry(file)
+            .or_insert_with(HashSet::new)
+            .insert(id);
+    }
+
     pub fn remove_file(&self, file: &str) {
         if let Some((_, keys)) = self.by_file.remove(file) {
             for key in &keys {
@@ -60,6 +79,19 @@ impl SymbolTable {
                 }
             }
         }
+
+        // Optimized cleanup of id_refs using file_to_ids
+        if let Some((_, ids)) = self.file_to_ids.remove(file) {
+            for id in ids {
+                if let Some(mut files) = self.id_refs.get_mut(&id) {
+                    files.remove(file);
+                    if files.is_empty() {
+                        drop(files);
+                        self.id_refs.remove(&id);
+                    }
+                }
+            }
+        }
     }
 
     pub fn get(&self, file: &str, name: &str) -> Option<Symbol> {
@@ -68,17 +100,27 @@ impl SymbolTable {
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<Symbol> {
-        let query_lower = query.to_lowercase();
-        let mut results = Vec::new();
-        for entry in self.symbols.iter() {
-            if entry.value().name.to_lowercase().contains(&query_lower) {
-                results.push(entry.value().clone());
-                if results.len() >= limit {
-                    break;
-                }
-            }
-        }
-        results
+        use fuzzy_matcher::clangd::ClangdMatcher;
+        use fuzzy_matcher::FuzzyMatcher;
+        use rayon::prelude::*;
+
+        let matcher = ClangdMatcher::default();
+
+        let mut ranked_results: Vec<(i64, Symbol)> = self.symbols
+            .par_iter()
+            .filter_map(|entry| {
+                matcher.fuzzy_match(&entry.value().name, query)
+                    .map(|score| (score, entry.value().clone()))
+            })
+            .collect();
+
+        // Sort by score descending
+        ranked_results.sort_by(|a, b| b.0.cmp(&a.0));
+
+        ranked_results.into_iter()
+            .take(limit)
+            .map(|(_, sym)| sym)
+            .collect()
     }
 
     pub fn list_by_file(&self, file: &str) -> Vec<Symbol> {

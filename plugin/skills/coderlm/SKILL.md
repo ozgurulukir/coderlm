@@ -63,8 +63,8 @@ cli structure --depth 2                   # File tree with language breakdown
 ### Finding Code
 
 ```bash
-cli search "symbol_name" --limit 20       # Find symbols by name (index lookup)
-cli symbols --kind function --file path   # List all functions in a file
+cli search "symbol_name" --limit 20 [--cursor "C"]  # Find symbols by name (index lookup)
+cli symbols --kind function --file path [--limit N] [--cursor "C"] # List all functions in a file
 cli grep "pattern" --max-matches 20       # Scope-aware pattern search
 ```
 
@@ -101,6 +101,7 @@ Annotations persist across queries within a session — build shared understandi
 
 ```bash
 cli cleanup                               # End session
+cli stats                                 # Show server/cache status
 ```
 
 ## Inputs

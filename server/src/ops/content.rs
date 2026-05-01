@@ -6,7 +6,9 @@ use serde::Serialize;
 
 use crate::index::file_entry::Language;
 use crate::index::file_tree::FileTree;
-use crate::symbols::queries;
+use crate::symbols::{parser, queries};
+
+use crate::server::state::{FileCache, ParseCache};
 
 #[derive(Debug, Serialize)]
 pub struct PeekResponse {
@@ -20,6 +22,7 @@ pub struct PeekResponse {
 pub fn peek(
     root: &Path,
     file_tree: &Arc<FileTree>,
+    file_cache: &Arc<FileCache>,
     file: &str,
     start: usize,
     end: usize,
@@ -29,8 +32,9 @@ pub fn peek(
     }
 
     let abs_path = root.join(file);
-    let source =
-        std::fs::read_to_string(&abs_path).map_err(|e| format!("Failed to read '{}': {}", file, e))?;
+    let source = file_cache
+        .get_or_read(&abs_path, file)
+        .map_err(|e| e.to_string())?;
 
     let lines: Vec<&str> = source.lines().collect();
     let total_lines = lines.len();
@@ -94,16 +98,20 @@ impl GrepScope {
 pub fn grep(
     root: &Path,
     file_tree: &Arc<FileTree>,
+    file_cache: &Arc<FileCache>,
+    parse_cache: &Arc<ParseCache>,
     pattern: &str,
     max_matches: usize,
     context_lines: usize,
 ) -> Result<GrepResponse, String> {
-    grep_with_scope(root, file_tree, pattern, max_matches, context_lines, GrepScope::All)
+    grep_with_scope(root, file_tree, file_cache, parse_cache, pattern, max_matches, context_lines, GrepScope::All)
 }
 
 pub fn grep_with_scope(
     root: &Path,
     file_tree: &Arc<FileTree>,
+    file_cache: &Arc<FileCache>,
+    parse_cache: &Arc<ParseCache>,
     pattern: &str,
     max_matches: usize,
     context_lines: usize,
@@ -123,14 +131,14 @@ pub fn grep_with_scope(
 
     for (rel_path, language) in &paths {
         let abs_path = root.join(rel_path);
-        let source = match std::fs::read_to_string(&abs_path) {
+        let source = match file_cache.get_or_read(&abs_path, rel_path) {
             Ok(s) => s,
             Err(_) => continue,
         };
 
         // For scope=code, build a set of byte ranges that are inside comments/strings
         let excluded_ranges = if scope == GrepScope::Code && language.has_tree_sitter_support() {
-            compute_non_code_ranges(&source, *language)
+            compute_non_code_ranges(&source, rel_path, *language, parse_cache)
         } else {
             Vec::new()
         };
@@ -199,7 +207,12 @@ pub fn grep_with_scope(
 }
 
 /// Compute byte ranges of comment and string nodes using tree-sitter.
-fn compute_non_code_ranges(source: &str, language: Language) -> Vec<(usize, usize)> {
+fn compute_non_code_ranges(
+    source: &str,
+    rel_path: &str,
+    language: Language,
+    parse_cache: &ParseCache,
+) -> Vec<(usize, usize)> {
     use tree_sitter::StreamingIterator;
 
     let config = match queries::get_language_config(language) {
@@ -207,14 +220,9 @@ fn compute_non_code_ranges(source: &str, language: Language) -> Vec<(usize, usiz
         None => return Vec::new(),
     };
 
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&config.language).is_err() {
-        return Vec::new();
-    }
-
-    let tree = match parser.parse(source, None) {
-        Some(t) => t,
-        None => return Vec::new(),
+    let tree = match parser::get_parse_tree(rel_path, source, language, parse_cache) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
     };
 
     // Query for comment and string nodes
@@ -307,6 +315,7 @@ pub struct ChunkInfo {
 pub fn chunk_indices(
     root: &Path,
     file_tree: &Arc<FileTree>,
+    file_cache: &Arc<FileCache>,
     file: &str,
     size: usize,
     overlap: usize,
@@ -322,8 +331,9 @@ pub fn chunk_indices(
     }
 
     let abs_path = root.join(file);
-    let source =
-        std::fs::read_to_string(&abs_path).map_err(|e| format!("Failed to read '{}': {}", file, e))?;
+    let source = file_cache
+        .get_or_read(&abs_path, file)
+        .map_err(|e| e.to_string())?;
 
     let total_bytes = source.len();
     let step = size - overlap;
