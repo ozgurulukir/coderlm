@@ -142,11 +142,12 @@ fn handle_file_change(
     file_tree.insert(entry);
 
     if language.has_tree_sitter_support() {
+        // Remove old symbols before re-extraction to avoid stale byte offsets
+        // if extraction fails — wrong code is worse than no code.
+        symbol_table.remove_file(rel_path);
+
         match extract_symbols_from_file(root, rel_path, language) {
             Ok((symbols, refs)) => {
-                // Remove old symbols only after successful re-extraction
-                symbol_table.remove_file(rel_path);
-
                 let count = symbols.len();
                 for sym in symbols {
                     symbol_table.insert(sym);
@@ -164,6 +165,7 @@ fn handle_file_change(
             }
         }
     }
+
 }
 
 fn handle_file_delete(

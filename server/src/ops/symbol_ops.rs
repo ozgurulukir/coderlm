@@ -68,18 +68,22 @@ pub fn search_symbols(
     // Fetch enough candidates for cursor-based pagination on fuzzy-sorted results.
     // Cursor key is file::line::name on the relevance-ranked list.
     let fetch_limit = if cursor.is_some() {
-        limit.saturating_mul(3).max(100)
+        limit.saturating_mul(5).max(200)
     } else {
         limit + 1  // +1 to detect has_more
     };
 
     let mut results = symbol_table.search(query, fetch_limit);
 
-    // Apply cursor on the fuzzy-ranked list (stable within a session for the same query)
-    if let Some(c) = cursor
-        && let Some(pos) = results.iter().position(|s| make_cursor(s) == c)
-    {
-        results = results.split_off(pos + 1);
+    // Apply cursor on the fuzzy-ranked list.
+    // If cursor not found (results changed or fetch_limit too small),
+    // clear results to prevent returning the first page again.
+    if let Some(c) = &cursor {
+        if let Some(pos) = results.iter().position(|s| make_cursor(s) == *c) {
+            results = results.split_off(pos + 1);
+        } else {
+            results.clear();
+        }
     }
 
     let has_more = results.len() > limit;
@@ -158,11 +162,12 @@ pub fn redefine_symbol(
 /// Collect files without tree-sitter support from the file tree,
 /// appending them to candidates so regex fallback can scan them.
 fn collect_non_ts_files(file_tree: &Arc<FileTree>, candidates: &mut Vec<String>) {
+    let existing: std::collections::HashSet<String> = candidates.iter().cloned().collect();
     for entry in file_tree.files.iter() {
         if !entry.value().language.has_tree_sitter_support() {
-            let path = entry.key().clone();
-            if !candidates.contains(&path) {
-                candidates.push(path);
+            let path = entry.key();
+            if !existing.contains(path) {
+                candidates.push(path.clone());
             }
         }
     }
