@@ -93,20 +93,6 @@ impl GrepScope {
     }
 }
 
-/// Grep with default scope (matches anywhere). Convenience wrapper.
-#[allow(dead_code)]
-pub fn grep(
-    root: &Path,
-    file_tree: &Arc<FileTree>,
-    file_cache: &Arc<FileCache>,
-    parse_cache: &Arc<ParseCache>,
-    pattern: &str,
-    max_matches: usize,
-    context_lines: usize,
-) -> Result<GrepResponse, String> {
-    grep_with_scope(root, file_tree, file_cache, parse_cache, pattern, max_matches, context_lines, GrepScope::All)
-}
-
 pub fn grep_with_scope(
     root: &Path,
     file_tree: &Arc<FileTree>,
@@ -276,7 +262,7 @@ fn compute_non_code_ranges(
         }
     }
 
-    // Sort and merge overlapping ranges
+    // Sort by start byte for binary search
     ranges.sort_by_key(|r| r.0);
     ranges
 }

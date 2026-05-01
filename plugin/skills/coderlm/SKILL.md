@@ -10,7 +10,21 @@ allowed-tools:
 
 You have access to a tree-sitter-backed index server that knows the structure of this codebase: every function, every caller, every symbol, every test reference. Use it instead of guessing with grep.
 
-The tree-sitter is monitoring the directory and will stay up-to-date as you make changes in the codebase.
+The server monitors the directory via filesystem watcher and stays up-to-date as you make changes.
+
+## Why This Exists: Read Without Guessing
+
+When you need to understand code, your alternatives are:
+
+| Approach | What happens | Risk |
+|----------|-------------|------|
+| `grep` + guess | Find a call site, infer the function body from nearby code | **High** — you reconstruct, you hallucinate |
+| Read entire file | Load 500 lines to find the 20 you need | Wasteful, context fills up |
+| `impl` / `peek` / `variables` | Server returns **byte-exact** source from its index | **Zero** — the actual code, not a reconstruction |
+
+**The "Read" phase of this RLM pattern has three tools — `impl`, `peek`, `variables`. Use all three before falling back to the Read tool.** They return what the tree-sitter parser extracted: byte ranges, not line estimates, not regex approximations. When the server says "this is the function body", it is exactly the function body — every character, no guesswork.
+
+> **Never reconstruct a function body from grep output.** Grep shows you fragments. Your training data lets you guess the rest. That guess is sometimes wrong. `impl` returns the actual source.
 
 ## How to Explore
 
@@ -33,6 +47,7 @@ With the index:
 - **Caller chains** instead of grep-and-hope — know exactly what invokes a function
 - **Exact implementations** instead of full-file reads — get the 20-line function body, not the 500-line file
 - **Test discovery** by symbol reference — find what tests cover a function, not by guessing test filenames
+- **Byte-exact retrieval** — every character in an `impl` response is verified source code, not a reconstruction
 
 ## Prerequisites
 
@@ -53,6 +68,8 @@ All commands go through the wrapper script:
 python3 skills/coderlm/scripts/coderlm_cli.py <command> [args]
 ```
 
+Abbreviated as `cli` below.
+
 ### Setup
 
 ```bash
@@ -63,20 +80,51 @@ cli structure --depth 2                   # File tree with language breakdown
 ### Finding Code
 
 ```bash
-cli search "symbol_name" --limit 20 [--cursor "C"]  # Find symbols by name (index lookup)
+cli search "symbol_name" --limit 20 [--cursor "C"]  # Find symbols by name (fuzzy ranking)
 cli symbols --kind function --file path [--limit N] [--cursor "C"] # List all functions in a file
-cli grep "pattern" --max-matches 20       # Scope-aware pattern search
+cli grep "pattern" --max-matches 20       # Scope-aware pattern search across all files
+cli grep "pattern" --scope code           # Skip matches in comments/strings
 ```
 
-### Retrieving Exact Code
+### 🔍 Read Phase — Exact Source Retrieval
+
+Three commands that return verified source code. **Always try these before reading a whole file.**
+
+#### `impl` — Get a function body (byte-exact)
+
+Returns the full source of a single function, method, class, or struct. The server uses its tree-sitter index to extract the exact byte range — not the surrounding file, not a best guess.
 
 ```bash
-cli impl function_name --file path        # Full function body (tree-sitter extracted)
-cli peek path --start N --end M           # Exact line range
-cli variables function_name --file path   # Local variables inside a function
+cli impl function_name --file path
 ```
 
-**Prefer `impl` and `peek` over the Read tool.** They return exactly the code you need — a single function from a 1000-line file, a specific line range — without loading irrelevant code into context. Fall back to Read only when you need an entire small file.
+**When to use:** You know the function name and file. You need to see what it does, what parameters it takes, or how it handles errors.
+
+**When NOT to use:** You don't know the file yet → use `search` first.
+
+**Example outcome:** `impl get_or_read state.rs` returns the ~40-line function body, not the 285-line state.rs file.
+
+#### `peek` — Read a specific line range
+
+Returns lines from a file by zero-indexed range. Use when you need context around a call site or error line.
+
+```bash
+cli peek path --start N --end M
+```
+
+**When to use:** You have a line number from a `callers` result, an error message, or a log line. You need the surrounding context (5-30 lines).
+
+**When to use Read instead:** You need the entire file and it is under ~50 lines. Otherwise, use `peek` for the specific range.
+
+#### `variables` — List local variables in a function
+
+Returns variable names and their containing function. Uses tree-sitter AST queries for supported languages, regex fallback for others.
+
+```bash
+cli variables function_name --file path
+```
+
+**When to use:** You need to understand what state flows through a function — which variables are introduced, what names they have. Useful before reading a complex function body: scan variables first, then `impl` to see how they're used.
 
 ### Tracing Connections
 
@@ -96,6 +144,21 @@ cli mark tests/integration.rs test
 ```
 
 Annotations persist across queries within a session — build shared understanding as you go.
+
+### Pagination
+
+Commands that return lists (`search`, `symbols`, `callers`, `tests`) support cursor-based pagination:
+
+```bash
+# First page (get 20 results)
+cli search "handler" --limit 20
+# → response includes "next_cursor": "src/server/handler.rs::142::handle_request"
+
+# Next page (pass the cursor back)
+cli search "handler" --limit 20 --cursor "src/server/handler.rs::142::handle_request"
+```
+
+When `next_cursor` is non-null, there are more results. Keep passing it until you find what you need or `next_cursor` becomes null.
 
 ### Cleanup
 
@@ -118,28 +181,40 @@ If no query is provided, ask what the user wants to find or understand about the
 1. **Init** — `cli init` to create a session and index the project.
 2. **Orient** — `cli structure` to see the project layout. Identify likely starting points.
 3. **Find the entrypoint** — `cli search` or `cli grep` to locate the starting symbol or pattern.
-4. **Retrieve** — `cli impl` to read the exact implementation. Not the file. The function.
+4. **Read: Retrieve exact source** — Use the three Read tools in sequence:
+   - `cli impl` to get the function body (byte-exact)
+   - `cli variables` to see what state the function introduces
+   - `cli peek` to read specific lines around call sites
+   - **Not the file. Not a grep fragment. Exact source.**
 5. **Trace** — `cli callers` to see what calls it. `cli impl` on those callers. Follow the chain.
 6. **Widen** — `cli tests` to find test coverage. `cli grep` for related patterns discovered during tracing.
 7. **Annotate** — `cli define-symbol` and `cli define-file` as understanding solidifies.
 8. **Synthesize** — Compile findings into a coherent answer with specific file:line references.
 
-Steps 3–7 repeat. A typical exploration is: find a symbol → read its implementation → trace its callers → read those implementations → discover related symbols → repeat until the causal chain is clear.
+Steps 3–7 repeat. A typical exploration is: find a symbol → read its implementation (impl) → trace its callers → read those implementations → discover related symbols → repeat until the causal chain is clear.
 
 ## When to Use the Server vs Native Tools
 
 | Task | Use server | Why |
 |------|-----------|-----|
-| Find a function by name | `search` | Index lookup, not file globbing |
+| Find a function by name | `search` | Fuzzy-indexed lookup, not file globbing |
 | Find code when name is unknown | `grep` + `symbols` | Searches all indexed files at once |
-| Get a function's source | `impl` | Returns just that function, even from large files |
-| Read specific lines | `peek` | Surgical extraction, not the whole file |
-| Find what calls a function | `callers` | Cross-project search with exact call sites |
+| Get a function's exact source | `impl` | Byte-exact extraction from tree-sitter index |
+| List variables in a function | `variables` | AST-extracted variable names, not regex heuristics |
+| Read a specific line range | `peek` | Surgical extraction by 0-indexed line range |
+| Find what calls a function | `callers` | Inverted-index lookup with exact call sites |
 | Find tests for a function | `tests` | By symbol reference, not filename guessing |
 | Get project overview | `structure` | Tree with file counts and language breakdown |
-| Read an entire small file | Read tool | When you genuinely need the whole file |
+| Check server health | `stats` | View cache hit rates and project metrics |
+| Read an entire small file | Read tool | Only when file < ~50 lines OR you need the whole thing |
 
-**Default to the server.** Use Read only when you need an entire file or the server is unavailable.
+**Default to the server.** Follow this escalation path:
+
+```
+impl / peek / variables   →   search / callers / tests   →   Read tool (last resort)
+```
+
+Use Read only when (a) the file is small (< 50 lines), (b) it's a non-code file (markdown, config, JSON), or (c) you need structural context that spans the entire file.
 
 ## Troubleshooting
 
@@ -147,5 +222,7 @@ Steps 3–7 repeat. A typical exploration is: find a symbol → read its impleme
 - **"No active session"** — Run `cli init` first.
 - **"Project was evicted"** — Server hit capacity (default 5 projects). Re-run `cli init`.
 - **Search returns nothing relevant** — Try broader grep patterns or list all symbols: `cli symbols --limit 200`.
+- **`impl` returns empty or wrong content** — Verify the symbol name and file path. Use `search` to find the correct name first.
+- **Stop reading entire files.** If you typed `Read` on a 500-line source file to find one function, you skipped `impl`. Go back and use `impl`.
 
 For the full API endpoint reference, see [references/api-reference.md](references/api-reference.md).

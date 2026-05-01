@@ -65,19 +65,21 @@ pub fn search_symbols(
     limit: usize,
     cursor: Option<String>,
 ) -> (Vec<Symbol>, Option<String>) {
-    let mut results = symbol_table.search(query, 1000); // Get more candidates
-    
-    results.sort_by(|a, b| {
-        a.file.cmp(&b.file)
-            .then(a.line_range.0.cmp(&b.line_range.0))
-            .then(a.name.cmp(&b.name))
-    });
+    // Fetch enough candidates for cursor-based pagination on fuzzy-sorted results.
+    // Cursor key is file::line::name on the relevance-ranked list.
+    let fetch_limit = if cursor.is_some() {
+        limit.saturating_mul(3).max(100)
+    } else {
+        limit + 1  // +1 to detect has_more
+    };
 
-    // Apply cursor
-    if let Some(c) = cursor {
-        if let Some(pos) = results.iter().position(|s| make_cursor(s) == c) {
-            results = results.split_off(pos + 1);
-        }
+    let mut results = symbol_table.search(query, fetch_limit);
+
+    // Apply cursor on the fuzzy-ranked list (stable within a session for the same query)
+    if let Some(c) = cursor
+        && let Some(pos) = results.iter().position(|s| make_cursor(s) == c)
+    {
+        results = results.split_off(pos + 1);
     }
 
     let has_more = results.len() > limit;
@@ -153,6 +155,20 @@ pub fn redefine_symbol(
     }
 }
 
+/// Collect files without tree-sitter support from the file tree,
+/// appending them to candidates so regex fallback can scan them.
+fn collect_non_ts_files(file_tree: &Arc<FileTree>, candidates: &mut Vec<String>) {
+    for entry in file_tree.files.iter() {
+        if !entry.value().language.has_tree_sitter_support() {
+            let path = entry.key().clone();
+            if !candidates.contains(&path) {
+                candidates.push(path);
+            }
+        }
+    }
+}
+
+
 /// Find callers of a symbol using tree-sitter call-expression queries.
 /// Falls back to regex for files without tree-sitter support.
 pub fn find_callers(
@@ -183,6 +199,10 @@ pub fn find_callers(
     if !candidate_files.contains(&file.to_string()) {
         candidate_files.push(file.to_string());
     }
+    
+    // Collect non-tree-sitter files so regex fallback can scan them.
+    // Tree-sitter files are already narrowed by the inverted index.
+    collect_non_ts_files(file_tree, &mut candidate_files);
     
     candidate_files.sort();
 
@@ -368,7 +388,7 @@ pub struct CallerInfo {
 /// Find test functions that reference a given symbol.
 pub fn find_tests(
     root: &Path,
-    _file_tree: &Arc<FileTree>,
+    file_tree: &Arc<FileTree>,
     symbol_table: &Arc<SymbolTable>,
     file_cache: &Arc<FileCache>,
     symbol_name: &str,
@@ -393,24 +413,31 @@ pub fn find_tests(
         candidate_files.push(file.to_string());
     }
     
+    // Collect non-tree-sitter files so symbol body scan covers them too.
+    collect_non_ts_files(file_tree, &mut candidate_files);
+    
     candidate_files.sort();
+    
 
     for rel_path in candidate_files {
-        // Look through symbols in this file to see if any are tests
+        // Collect test symbols for this file first
         let file_symbols = symbol_table.list_by_file(&rel_path);
-        
-        for sym in file_symbols {
-            if !is_test_symbol(&sym) {
-                continue;
-            }
+        let test_symbols: Vec<&Symbol> = file_symbols.iter()
+            .filter(|s| is_test_symbol(s))
+            .collect();
 
-            // Read the test function body and check if it references the target symbol
-            let abs_path = root.join(&sym.file);
-            let source = match file_cache.get_or_read(&abs_path, &sym.file) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
+        if test_symbols.is_empty() {
+            continue;
+        }
 
+        // Read the file once for all its test symbols
+        let abs_path = root.join(&rel_path);
+        let source = match file_cache.get_or_read(&abs_path, &rel_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        for sym in test_symbols {
             let start = sym.byte_range.0;
             let end = sym.byte_range.1.min(source.len());
             let body = &source[start..end];

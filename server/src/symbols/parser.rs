@@ -89,7 +89,7 @@ pub fn extract_symbols_from_file(
     let raw_source = std::fs::read_to_string(&abs_path)?;
 
     // For Vue files, extract the <script> content and parse it as TypeScript.
-    let (_source, effective_language) = if language == Language::Vue {
+    let (source, effective_language) = if language == Language::Vue {
         let script_content = extract_vue_script_content(&raw_source);
         if script_content.is_empty() {
             debug!("No <script> block found in {}", rel_path);
@@ -105,10 +105,8 @@ pub fn extract_symbols_from_file(
         None => return Ok((Vec::new(), HashSet::new())),
     };
 
-    let abs_path = root.join(rel_path);
-    let source = std::fs::read_to_string(&abs_path)?;
-
     let mut parser = tree_sitter::Parser::new();
+
     parser.set_language(&config.language)?;
 
     let tree = match parser.parse(&source, None) {

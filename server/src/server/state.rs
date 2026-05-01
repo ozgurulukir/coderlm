@@ -35,6 +35,7 @@ impl FileCache {
     }
 
     pub fn get_or_read(&self, abs_path: &Path, rel_path: &str) -> Result<Arc<str>, AppError> {
+        // Fast path: check without holding the lock longer than needed
         {
             let cache = self.cache.lock();
             if let Some(content) = cache.get(rel_path) {
@@ -43,19 +44,27 @@ impl FileCache {
             }
         }
 
-        self.misses.fetch_add(1, Ordering::Relaxed);
+        // Slow path: read from disk
         let content_raw = std::fs::read_to_string(abs_path)
             .map_err(|e| AppError::NotFound(format!("Failed to read {}: {}", rel_path, e)))?;
         let content: Arc<str> = Arc::from(content_raw);
         let bytes = content.len();
 
-        let mut cache = self.cache.lock();
-        let mut total = self.total_bytes.lock();
-
-        // If this single file is larger than the cache, don't cache it
+        // Don't cache files larger than the entire cache
         if bytes > self.max_bytes {
             return Ok(content);
         }
+
+        let mut cache = self.cache.lock();
+        // Double-check: another thread may have inserted while we were reading
+        if cache.contains_key(rel_path) {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(content);
+        }
+
+        self.misses.fetch_add(1, Ordering::Relaxed);
+
+        let mut total = self.total_bytes.lock();
 
         // Simple eviction: clear entire cache if over capacity
         if *total + bytes > self.max_bytes {
