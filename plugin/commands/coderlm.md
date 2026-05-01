@@ -7,6 +7,8 @@ description: Explore a codebase using tree-sitter-backed indexing. Use when you 
 
 You have access to a tree-sitter-backed index server that knows the structure of this codebase: every function, every caller, every symbol. Use it instead of guessing with grep.
 
+**Why this exists:** Without the index, you grep for strings, read entire files, and reconstruct function bodies from fragments. That produces false confidence — you see code near your search term but miss the actual execution path, and your reconstruction is sometimes wrong. The server returns **byte-exact** source code: `impl` gives you the actual function body, not a guess. Never reconstruct a function from grep output.
+
 ## Setup
 
 ```bash
@@ -22,12 +24,25 @@ CLI=".claude/coderlm_state/coderlm_cli.py"
 python3 $CLI structure                          # File tree + module overview
 python3 $CLI stats                              # Server status + cache hit rates
 python3 $CLI search "symbol_name"               # Find symbols by name
-python3 $CLI impl function_name --file path     # Get exact implementation
+python3 $CLI impl function_name --file path     # Get exact implementation (byte-exact)
 python3 $CLI callers function_name --file path  # Who calls this function?
 python3 $CLI tests --file path                  # Find tests covering this file
 python3 $CLI grep "pattern"                     # Scope-aware pattern search
 python3 $CLI peek path --start N --end N        # Read a specific line range
+python3 $CLI variables function_name --file file # List local variables in a function
 ```
+
+## Read Phase — Three Tools, One Contract
+
+The server returns **actual source code**, not line estimates or regex approximations:
+
+| Tool | Returns | When to use |
+|------|---------|-------------|
+| `impl` | Full function body (byte-exact from tree-sitter) | You know the function name and file |
+| `peek` | Lines N–M from any indexed file | You have a line number from callers/error/log |
+| `variables` | Local variable names in a function | You need to understand data flow before reading the body |
+
+**Always try these three before reading a whole file.** Use Read only when the file is under ~50 lines OR it's a non-code file (markdown, JSON, config).
 
 ## How to Explore
 

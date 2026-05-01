@@ -3,6 +3,8 @@
 All endpoints prefixed with `/api/v1`. Session-scoped endpoints require `X-Session-Id` header.
 The CLI wrapper (`coderlm_cli.py`) handles headers and session management automatically.
 
+**Tool selection order:** `impl`/`peek`/`variables` (exact source) → `search`/`callers`/`tests` (cross-refs) → `grep`/`structure` (explore) → native Read (last resort, small files only).
+
 ## CLI Command Reference
 
 All commands below assume the CLI is at `skills/coderlm/scripts/coderlm_cli.py`.

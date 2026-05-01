@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\",\"additionalContext\":\"Prefer the coderlm skill over Read/Grep/Glob for semantic code navigation in Rust, Python, TypeScript, JavaScript, Go, Java, Scala, SQL. Invoke it with Skill(coderlm). CodeRLM provides tree-sitter-indexed symbol lookup, call graphs, paginated search, and cross-file references.\"}}'"
+            "command": "echo 'Use coderlm for ALL code understanding tasks. The Read phase has three tools: impl (byte-exact function body), peek (exact line range), variables (local variable names). Always try these before Read or grep. For semantic code navigation in Rust, Python, TypeScript, JavaScript, Go, Java, Scala, SQL, invoke Skill(coderlm).'"
           }
         ]
       }

@@ -141,8 +141,11 @@ fn handle_file_change(
     let language = entry.language;
     file_tree.insert(entry);
 
-    symbol_table.remove_file(rel_path);
     if language.has_tree_sitter_support() {
+        // Remove old symbols before re-extraction to avoid stale byte offsets
+        // if extraction fails — wrong code is worse than no code.
+        symbol_table.remove_file(rel_path);
+
         match extract_symbols_from_file(root, rel_path, language) {
             Ok((symbols, refs)) => {
                 let count = symbols.len();
@@ -158,10 +161,11 @@ fn handle_file_change(
                 debug!("Re-extracted {} symbols from {}", count, rel_path);
             }
             Err(e) => {
-                debug!("Failed to re-extract symbols from {}: {}", rel_path, e);
+                warn!("Failed to re-extract symbols from {}: {}", rel_path, e);
             }
         }
     }
+
 }
 
 fn handle_file_delete(
