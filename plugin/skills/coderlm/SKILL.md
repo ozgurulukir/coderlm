@@ -95,7 +95,7 @@ Three commands that return verified source code. **Always try these before readi
 Returns the full source of a single function, method, class, or struct. The server uses its tree-sitter index to extract the exact byte range — not the surrounding file, not a best guess.
 
 ```bash
-cli impl function_name --file path
+cli impl function_name [--file path]  # --file auto-resolves if omitted
 ```
 
 **When to use:** You know the function name and file. You need to see what it does, what parameters it takes, or how it handles errors.
@@ -109,7 +109,8 @@ cli impl function_name --file path
 Returns lines from a file by zero-indexed range. Use when you need context around a call site or error line.
 
 ```bash
-cli peek path --start N --end M
+cli peek path --line N              # Single line (1-indexed)
+cli peek path --start N --end M     # Line range (0-indexed)
 ```
 
 **When to use:** You have a line number from a `callers` result, an error message, or a log line. You need the surrounding context (5-30 lines).
@@ -121,7 +122,7 @@ cli peek path --start N --end M
 Returns variable names and their containing function. Uses tree-sitter AST queries for supported languages, regex fallback for others.
 
 ```bash
-cli variables function_name --file path
+cli variables function_name [--file path]  # --file auto-resolves
 ```
 
 **When to use:** You need to understand what state flows through a function — which variables are introduced, what names they have. Useful before reading a complex function body: scan variables first, then `impl` to see how they're used.
@@ -129,8 +130,8 @@ cli variables function_name --file path
 ### Tracing Connections
 
 ```bash
-cli callers function_name --file path     # Every call site: file, line, calling code
-cli tests function_name --file path       # Tests referencing this symbol
+cli callers function_name [--file path]     # Every call site (--file auto-resolves)
+cli tests function_name [--file path]       # Tests (--file auto-resolves)
 ```
 
 These search the entire indexed codebase, not just files you've already seen.

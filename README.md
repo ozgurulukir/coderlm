@@ -29,7 +29,7 @@ This project builds on two prior works:
 server/                          Rust server (the only built artifact)
 plugin/                          Self-contained Claude Code plugin
   plugin/skills/coderlm/         Skill definition + Python CLI wrapper
-  plugin/hooks/                  Claude Code hooks (SessionStart, UserPromptSubmit, PreCompact, Stop)
+  plugin/hooks/                  Claude Code hooks (SessionStart, UserPromptSubmit, SubagentStart, Stop)
   plugin/commands/               Slash command definitions
   plugin/scripts/                Hook scripts (session lifecycle)
   plugin/.claude-plugin/         Plugin manifest (plugin.json)
@@ -120,7 +120,7 @@ python3 plugin/skills/coderlm/scripts/coderlm_cli.py init
 python3 plugin/skills/coderlm/scripts/coderlm_cli.py stats
 python3 plugin/skills/coderlm/scripts/coderlm_cli.py search "handler"
 python3 plugin/skills/coderlm/scripts/coderlm_cli.py symbols --limit 50 --cursor "..."
-python3 plugin/skills/coderlm/scripts/coderlm_cli.py impl run_server --file src/main.rs
+python3 plugin/skills/coderlm/scripts/coderlm_cli.py impl run_server              # --file auto-resolves if unique
 ```
 
 ### Updating
@@ -142,11 +142,10 @@ cd server && cargo build --release
 
 ## What the Plugin Provides
 
-When installed, CodeRLM gives Claude Code:
-
+CodeRLM provides:
 - **`/coderlm` skill** — Structured workflow for codebase exploration (init → structure → search → impl → callers → synthesize)
-- **SessionStart hook** — Auto-detects a running server and initializes sessions
-- **UserPromptSubmit hook** — Guides Claude to use indexed lookups instead of glob/grep/read
+- **Claude Code plugin** — Hooks (SessionStart, UserPromptSubmit, SubagentStart, Stop) and slash command
+- **Multi-platform support** — Generate instruction files for Cursor, Windsurf, Copilot, Gemini, Codex, OpenCode, and Augment via `python3 plugin/generate.py --platform <name>`
 - **Zero Python dependencies** — The CLI wrapper uses only the Python standard library
 
 ## Server CLI

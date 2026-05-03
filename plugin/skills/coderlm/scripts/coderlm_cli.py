@@ -2,30 +2,13 @@
 """CLI wrapper for the coderlm-server API.
 
 Manages session state and provides clean commands for codebase exploration.
-All state is cached in .claude/coderlm_state/session.json relative to cwd.
+State is cached relative to cwd (default: .claude/coderlm_state/session.json).
+Override with CODERLM_STATE_DIR env var.
 
-Usage:
-  python3 coderlm_cli.py init [--port PORT] [--cwd PATH]
-  python3 coderlm_cli.py structure [--depth N]
-  python3 coderlm_cli.py symbols [--kind KIND] [--file FILE] [--limit N]
-  python3 coderlm_cli.py search QUERY [--limit N]
-  python3 coderlm_cli.py impl SYMBOL --file FILE
-  python3 coderlm_cli.py callers SYMBOL --file FILE [--limit N]
-  python3 coderlm_cli.py tests SYMBOL --file FILE [--limit N]
-  python3 coderlm_cli.py variables FUNCTION --file FILE
-  python3 coderlm_cli.py peek FILE [--start N] [--end N]
-  python3 coderlm_cli.py grep PATTERN [--max-matches N] [--context-lines N] [--scope all|code]
-  python3 coderlm_cli.py chunks FILE [--size N] [--overlap N]
-  python3 coderlm_cli.py define-file FILE DEFINITION
-  python3 coderlm_cli.py redefine-file FILE DEFINITION
-  python3 coderlm_cli.py define-symbol SYMBOL --file FILE DEFINITION
-  python3 coderlm_cli.py redefine-symbol SYMBOL --file FILE DEFINITION
-  python3 coderlm_cli.py mark FILE TYPE
-  python3 coderlm_cli.py save-annotations
-  python3 coderlm_cli.py load-annotations
-  python3 coderlm_cli.py history [--limit N]
-  python3 coderlm_cli.py status
-  python3 coderlm_cli.py stats
+Quick start:
+  python3 coderlm_cli.py init
+  python3 coderlm_cli.py search "handler"
+  python3 coderlm_cli.py impl handler --file src/server/routes.rs
 """
 
 from __future__ import annotations
@@ -70,9 +53,51 @@ def _base_url(state: dict) -> str:
 def _session_id(state: dict) -> str:
     sid = state.get("session_id")
     if not sid:
-        print("ERROR: No active session. Run: coderlm_cli.py init", file=sys.stderr)
-        sys.exit(1)
+        _die("No active session. Run: coderlm_cli.py init")
     return sid
+
+
+def _die(msg: str) -> None:
+    print(f"ERROR: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _resolve_file(state: dict, symbol_name: str) -> str:
+    """Auto-resolve a symbol to its file by searching the index.
+
+    If exactly one match is found, returns the file path.
+    If multiple matches, prints them and exits with guidance.
+    If no matches, exits with an error.
+    """
+    results = _get(state, "/symbols/search", {"q": symbol_name, "limit": 50})
+    symbols = results.get("symbols", [])
+
+    if not symbols:
+        _die(
+            f"Symbol '{symbol_name}' not found in index.\n"
+            f"  Check the name with: coderlm_cli.py search \"{symbol_name}\"\n"
+            f"  Or list all symbols: coderlm_cli.py symbols --limit 200"
+        )
+
+    # Exact matches first
+    exact = [s for s in symbols if s["name"] == symbol_name]
+    if len(exact) == 1:
+        return exact[0]["file"]
+    if len(exact) > 1:
+        lines = "\n".join(f"  {s['file']}  (line {s['line_range'][0]})" for s in exact)
+        _die(
+            f"Symbol '{symbol_name}' found in multiple files. Specify --file:\n{lines}"
+        )
+
+    # No exact match — show closest results
+    lines = "\n".join(
+        f"  {s['name']}  in  {s['file']}  (line {s['line_range'][0]})"
+        for s in symbols[:10]
+    )
+    _die(
+        f"No exact match for '{symbol_name}'. Closest results:\n{lines}\n"
+        f"  Use the correct name and --file flag."
+    )
 
 
 def _request(
@@ -108,15 +133,16 @@ def _request(
             _clear_state()
             sys.exit(1)
 
-        print(json.dumps(err, indent=2))
+        # Pretty-print the error with the status code
+        detail = err.get("error", err.get("message", json.dumps(err, indent=2)))
+        print(f"ERROR [{e.code}]: {detail}", file=sys.stderr)
         sys.exit(1)
     except urllib.error.URLError as e:
-        print(
-            f"ERROR: Cannot connect to coderlm-server: {e.reason}\n"
-            f"Make sure the server is running: coderlm-server serve",
-            file=sys.stderr,
+        _die(
+            f"Cannot connect to coderlm-server ({e.reason}).\n"
+            f"  Start the server: coderlm-server serve\n"
+            f"  Then run: coderlm_cli.py init"
         )
-        sys.exit(1)
 
 
 def _get(state: dict, path: str, params: dict | None = None) -> dict:
@@ -148,13 +174,11 @@ def cmd_init(args: argparse.Namespace) -> None:
     port = args.port or 3000
     base = f"http://{host}:{port}/api/v1"
 
-    # Check server health first
     try:
         health = _request("GET", f"{base}/health")
     except SystemExit:
         return
 
-    # Create session
     result = _request("POST", f"{base}/sessions", data={"cwd": cwd})
     state = {
         "session_id": result["session_id"],
@@ -175,7 +199,6 @@ def cmd_init(args: argparse.Namespace) -> None:
 def cmd_status(args: argparse.Namespace) -> None:
     state = _load_state()
     if not state:
-        # No session — just check server health
         host = args.host or "127.0.0.1"
         port = args.port or 3000
         base = f"http://{host}:{port}/api/v1"
@@ -187,14 +210,10 @@ def cmd_status(args: argparse.Namespace) -> None:
     health = _request("GET", f"{base}/health")
     info = {"server": health, "session": state}
 
-    # Try to get session details
     sid = state.get("session_id")
     if sid:
         try:
-            session_info = _request(
-                "GET",
-                f"{base}/sessions/{sid}",
-            )
+            session_info = _request("GET", f"{base}/sessions/{sid}")
             info["session_details"] = session_info
         except SystemExit:
             info["session_details"] = "session may have expired"
@@ -236,13 +255,19 @@ def cmd_search(args: argparse.Namespace) -> None:
 
 def cmd_impl(args: argparse.Namespace) -> None:
     state = _load_state()
-    params = {"symbol": args.symbol, "file": args.file}
+    file = args.file
+    if not file:
+        file = _resolve_file(state, args.symbol)
+    params = {"symbol": args.symbol, "file": file}
     _output(_get(state, "/symbols/implementation", params))
 
 
 def cmd_callers(args: argparse.Namespace) -> None:
     state = _load_state()
-    params = {"symbol": args.symbol, "file": args.file}
+    file = args.file
+    if not file:
+        file = _resolve_file(state, args.symbol)
+    params = {"symbol": args.symbol, "file": file}
     if args.limit is not None:
         params["limit"] = args.limit
     _output(_get(state, "/symbols/callers", params))
@@ -250,7 +275,10 @@ def cmd_callers(args: argparse.Namespace) -> None:
 
 def cmd_tests(args: argparse.Namespace) -> None:
     state = _load_state()
-    params = {"symbol": args.symbol, "file": args.file}
+    file = args.file
+    if not file:
+        file = _resolve_file(state, args.symbol)
+    params = {"symbol": args.symbol, "file": file}
     if args.limit is not None:
         params["limit"] = args.limit
     _output(_get(state, "/symbols/tests", params))
@@ -258,17 +286,28 @@ def cmd_tests(args: argparse.Namespace) -> None:
 
 def cmd_variables(args: argparse.Namespace) -> None:
     state = _load_state()
-    params = {"function": args.function, "file": args.file}
+    file = args.file
+    if not file:
+        file = _resolve_file(state, args.function)
+    params = {"function": args.function, "file": file}
     _output(_get(state, "/symbols/variables", params))
 
 
 def cmd_peek(args: argparse.Namespace) -> None:
     state = _load_state()
-    params = {"file": args.file}
-    if args.start is not None:
-        params["start"] = args.start
-    if args.end is not None:
-        params["end"] = args.end
+    params: dict = {"file": args.file}
+
+    # --line N reads a single line (1-indexed, human-friendly)
+    if args.line is not None:
+        params["start"] = args.line - 1
+        params["end"] = args.line
+    else:
+        # --start/--end are 0-indexed (API-native)
+        if args.start is not None:
+            params["start"] = args.start
+        if args.end is not None:
+            params["end"] = args.end
+
     _output(_get(state, "/peek", params))
 
 
@@ -362,7 +401,7 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
 
     base = _base_url(state)
     sid = state["session_id"]
-    result = _request("DELETE", f"{base}/sessions/{sid}")
+    _request("DELETE", f"{base}/sessions/{sid}")
     _clear_state()
     print(f"Session {sid} deleted.")
 
@@ -387,7 +426,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     # init
-    p_init = sub.add_parser("init", help="Create a session for the current project")
+    p_init = sub.add_parser(
+        "init",
+        help="Create a session for the current project",
+        description="Index the project and create a session. Run once per project.",
+    )
     p_init.add_argument("--cwd", help="Project directory (default: $PWD)")
     p_init.add_argument("--host", default=None, help="Server host (default: 127.0.0.1)")
     p_init.add_argument("--port", type=int, default=None, help="Server port (default: 3000)")
@@ -400,60 +443,121 @@ def build_parser() -> argparse.ArgumentParser:
     p_status.set_defaults(func=cmd_status)
 
     # structure
-    p_struct = sub.add_parser("structure", help="Get project file tree")
+    p_struct = sub.add_parser(
+        "structure",
+        help="Get project file tree",
+        description="Show the project directory tree with file counts and language breakdown.",
+    )
     p_struct.add_argument("--depth", type=int, default=None, help="Tree depth (0=unlimited)")
     p_struct.set_defaults(func=cmd_structure)
 
     # symbols
-    p_sym = sub.add_parser("symbols", help="List symbols")
+    p_sym = sub.add_parser(
+        "symbols",
+        help="List symbols",
+        description="List symbols with optional kind/file filters. Supports pagination.",
+    )
     p_sym.add_argument("--kind", help="Filter: function, method, class, struct, enum, trait, interface, constant, type, module")
-    p_sym.add_argument("--file", help="Filter by file path")
+    p_sym.add_argument("--file", help="Filter by file path (relative to project root)")
     p_sym.add_argument("--limit", type=int, default=None)
     p_sym.add_argument("--cursor", help="Pagination cursor from previous response next_cursor field")
     p_sym.set_defaults(func=cmd_symbols)
 
     # search
-    p_search = sub.add_parser("search", help="Search symbols by name")
+    p_search = sub.add_parser(
+        "search",
+        help="Search symbols by name (fuzzy)",
+        description="Fuzzy-search symbol names. Returns ranked results. Use the 'file' field from results with impl/callers/tests.",
+    )
     p_search.add_argument("query", help="Search term")
     p_search.add_argument("--limit", type=int, default=None)
     p_search.add_argument("--cursor", help="Pagination cursor from previous response next_cursor field")
     p_search.set_defaults(func=cmd_search)
 
     # impl
-    p_impl = sub.add_parser("impl", help="Get full source of a symbol")
+    p_impl = sub.add_parser(
+        "impl",
+        help="Get full source of a symbol (byte-exact)",
+        description=(
+            "Return the exact source code of a symbol.\n"
+            "If --file is omitted, auto-resolves via search (exact match required).\n"
+            "Example: impl handle_request --file src/server/routes.rs\n"
+            "         impl handle_request  (auto-resolves if unique)"
+        ),
+    )
     p_impl.add_argument("symbol", help="Symbol name")
-    p_impl.add_argument("--file", required=True, help="File containing the symbol")
+    p_impl.add_argument("--file", default=None, help="File containing the symbol (auto-resolved if omitted)")
     p_impl.set_defaults(func=cmd_impl)
 
     # callers
-    p_callers = sub.add_parser("callers", help="Find call sites for a symbol")
+    p_callers = sub.add_parser(
+        "callers",
+        help="Find call sites for a symbol",
+        description=(
+            "Find every place that calls this symbol.\n"
+            "If --file is omitted, auto-resolves via search.\n"
+            "Example: callers run_server --file src/main.rs"
+        ),
+    )
     p_callers.add_argument("symbol", help="Symbol name")
-    p_callers.add_argument("--file", required=True, help="File containing the symbol")
+    p_callers.add_argument("--file", default=None, help="File containing the symbol (auto-resolved if omitted)")
     p_callers.add_argument("--limit", type=int, default=None)
     p_callers.set_defaults(func=cmd_callers)
 
     # tests
-    p_tests = sub.add_parser("tests", help="Find tests referencing a symbol")
+    p_tests = sub.add_parser(
+        "tests",
+        help="Find tests referencing a symbol",
+        description=(
+            "Find test functions that reference this symbol.\n"
+            "If --file is omitted, auto-resolves via search.\n"
+            "Example: tests scan_directory --file src/index/walker.rs"
+        ),
+    )
     p_tests.add_argument("symbol", help="Symbol name")
-    p_tests.add_argument("--file", required=True, help="File containing the symbol")
+    p_tests.add_argument("--file", default=None, help="File containing the symbol (auto-resolved if omitted)")
     p_tests.add_argument("--limit", type=int, default=None)
     p_tests.set_defaults(func=cmd_tests)
 
     # variables
-    p_vars = sub.add_parser("variables", help="List local variables in a function")
+    p_vars = sub.add_parser(
+        "variables",
+        help="List local variables in a function",
+        description=(
+            "List all local variable names in a function.\n"
+            "If --file is omitted, auto-resolves via search.\n"
+            "Example: variables scan_directory --file src/index/walker.rs"
+        ),
+    )
     p_vars.add_argument("function", help="Function name")
-    p_vars.add_argument("--file", required=True, help="File containing the function")
+    p_vars.add_argument("--file", default=None, help="File containing the function (auto-resolved if omitted)")
     p_vars.set_defaults(func=cmd_variables)
 
     # peek
-    p_peek = sub.add_parser("peek", help="Read a line range from a file")
-    p_peek.add_argument("file", help="File path")
+    p_peek = sub.add_parser(
+        "peek",
+        help="Read a line range from a file",
+        description=(
+            "Read specific lines from a file. Two modes:\n"
+            "  1-indexed (human-friendly): --line 42        reads line 42 only\n"
+            "  0-indexed (API-native):     --start 0 --end 50  reads lines 0-49\n"
+            "Examples:\n"
+            "  peek src/main.rs --line 42\n"
+            "  peek src/main.rs --start 10 --end 30"
+        ),
+    )
+    p_peek.add_argument("file", help="File path (relative to project root)")
+    p_peek.add_argument("--line", type=int, default=None, help="Read a single line (1-indexed)")
     p_peek.add_argument("--start", type=int, default=None, help="Start line (0-indexed)")
-    p_peek.add_argument("--end", type=int, default=None, help="End line (exclusive)")
+    p_peek.add_argument("--end", type=int, default=None, help="End line (exclusive, 0-indexed)")
     p_peek.set_defaults(func=cmd_peek)
 
     # grep
-    p_grep = sub.add_parser("grep", help="Regex search across all files")
+    p_grep = sub.add_parser(
+        "grep",
+        help="Regex search across all indexed files",
+        description="Search for a pattern across all project files. Scope-aware: --scope code skips comments and strings.",
+    )
     p_grep.add_argument("pattern", help="Regex pattern")
     p_grep.add_argument("--max-matches", type=int, default=None)
     p_grep.add_argument("--context-lines", type=int, default=None)

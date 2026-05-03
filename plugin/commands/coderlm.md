@@ -24,12 +24,13 @@ CLI=".claude/coderlm_state/coderlm_cli.py"
 python3 $CLI structure                          # File tree + module overview
 python3 $CLI stats                              # Server status + cache hit rates
 python3 $CLI search "symbol_name"               # Find symbols by name
-python3 $CLI impl function_name --file path     # Get exact implementation (byte-exact)
-python3 $CLI callers function_name --file path  # Who calls this function?
-python3 $CLI tests --file path                  # Find tests covering this file
+python3 $CLI impl function_name [--file path]     # Get exact implementation (--file auto-resolves)
+python3 $CLI callers function_name [--file path]  # Who calls this function? (--file auto-resolves)
+python3 $CLI tests function_name [--file path]  # Find tests referencing this symbol (--file auto-resolves)
 python3 $CLI grep "pattern"                     # Scope-aware pattern search
-python3 $CLI peek path --start N --end N        # Read a specific line range
-python3 $CLI variables function_name --file file # List local variables in a function
+python3 $CLI peek path --line N               # Read single line (1-indexed)
+python3 $CLI peek path --start N --end N      # Read line range (0-indexed)
+python3 $CLI variables function_name [--file path]  # List local variables (--file auto-resolves)
 ```
 
 ## Read Phase — Three Tools, One Contract
@@ -38,7 +39,7 @@ The server returns **actual source code**, not line estimates or regex approxima
 
 | Tool | Returns | When to use |
 |------|---------|-------------|
-| `impl` | Full function body (byte-exact from tree-sitter) | You know the function name and file |
+| `impl` | Full function body (byte-exact from tree-sitter) | You know the function name (--file auto-resolves) |
 | `peek` | Lines N–M from any indexed file | You have a line number from callers/error/log |
 | `variables` | Local variable names in a function | You need to understand data flow before reading the body |
 

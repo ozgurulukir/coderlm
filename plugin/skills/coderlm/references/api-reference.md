@@ -50,16 +50,16 @@ python3 cli symbols [--kind function] [--file src/main.rs] [--limit 50] [--curso
 python3 cli search "handler" [--limit 20] [--cursor "C"]
 
 # Get full source code of a symbol
-python3 cli impl run_server --file src/main.rs
+python3 cli impl run_server [--file src/main.rs]  # --file auto-resolves if omitted
 
 # Find call sites
-python3 cli callers scan_directory --file src/index/walker.rs [--limit 50]
+python3 cli callers scan_directory [--file src/index/walker.rs] [--limit 50]  # --file auto-resolves
 
 # Find tests referencing a symbol
-python3 cli tests scan_directory --file src/index/walker.rs [--limit 20]
+python3 cli tests scan_directory [--file src/index/walker.rs] [--limit 20]  # --file auto-resolves
 
 # List local variables in a function
-python3 cli variables scan_directory --file src/index/walker.rs
+python3 cli variables scan_directory [--file src/index/walker.rs]  # --file auto-resolves
 
 # Annotate a symbol
 python3 cli define-symbol scan_directory --file src/index/walker.rs "Walks codebase respecting gitignore"
@@ -70,7 +70,8 @@ python3 cli redefine-symbol scan_directory --file src/index/walker.rs "Updated d
 
 ```bash
 # Read lines from a file (0-indexed, end exclusive)
-python3 cli peek src/main.rs [--start 0] [--end 50]
+python3 cli peek src/main.rs --line 42             # Single line (1-indexed)
+python3 cli peek src/main.rs [--start 0] [--end 50]  # Line range (0-indexed)
 
 # Regex search across all indexed files
 python3 cli grep "DashMap" [--max-matches 50] [--context-lines 2]

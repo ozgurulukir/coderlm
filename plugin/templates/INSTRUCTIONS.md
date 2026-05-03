@@ -54,9 +54,10 @@ python3 {{CLI_PATH}} grep "pattern" --scope code           # Skip matches in com
 ### Retrieving Exact Code
 
 ```bash
-python3 {{CLI_PATH}} impl function_name --file path        # Full function body (tree-sitter extracted)
-python3 {{CLI_PATH}} peek path --start N --end M           # Exact line range
-python3 {{CLI_PATH}} variables function_name --file path   # Local variables inside a function
+python3 {{CLI_PATH}} impl function_name [--file path]    # Full function body (--file auto-resolves)
+python3 {{CLI_PATH}} peek path --line N                # Single line (1-indexed)
+python3 {{CLI_PATH}} peek path --start N --end M       # Line range (0-indexed)
+python3 {{CLI_PATH}} variables function_name [--file path]   # Local variables (--file auto-resolves)
 ```
 
 **Prefer `impl` and `peek` over reading entire files.** They return exactly the code you need — a single function from a 1000-line file, a specific line range — without loading irrelevant code into context.
@@ -64,8 +65,8 @@ python3 {{CLI_PATH}} variables function_name --file path   # Local variables ins
 ### Tracing Connections
 
 ```bash
-python3 {{CLI_PATH}} callers function_name --file path     # Every call site: file, line, calling code
-python3 {{CLI_PATH}} tests function_name --file path       # Tests referencing this symbol
+python3 {{CLI_PATH}} callers function_name [--file path]     # Every call site (--file auto-resolves)
+python3 {{CLI_PATH}} tests function_name [--file path]       # Tests (--file auto-resolves)
 ```
 
 These search the entire indexed codebase, not just files you've already seen.
@@ -108,7 +109,7 @@ Steps 3-7 repeat. A typical exploration is: find a symbol -> read its implementa
 |------|-----------|-----|
 | Find a function by name | `search` | Index lookup, not file globbing |
 | Find code when name is unknown | `grep` + `symbols` | Searches all indexed files at once |
-| Get a function's source | `impl` | Returns just that function, even from large files |
+| Get a function's source | `impl` | Returns just that function (--file auto-resolves if unique) |
 | Read specific lines | `peek` | Surgical extraction, not the whole file |
 | Find what calls a function | `callers` | Cross-project search with exact call sites |
 | Find tests for a function | `tests` | By symbol reference, not filename guessing |

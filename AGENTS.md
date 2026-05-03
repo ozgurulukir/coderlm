@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents when working with code in this repository.
 
 ## What This Is
 
@@ -11,7 +11,7 @@ CodeRLM applies the Recursive Language Model (RLM) pattern to codebases. A Rust 
 - `server/` — Rust codebase (the only code that gets built). Has its own `.git`.
 - `plugin/` — Self-contained Claude Code plugin root
   - `plugin/skills/coderlm/` — Skill definition + Python CLI wrapper
-  - `plugin/hooks/` — Claude Code hooks (SessionStart, UserPromptSubmit, PreCompact, Stop)
+  - `plugin/hooks/` — Claude Code hooks (SessionStart, UserPromptSubmit, SubagentStart, Stop)
   - `plugin/commands/` — Slash command definitions
   - `plugin/scripts/` — Hook scripts (session lifecycle)
   - `plugin/.claude-plugin/` — Plugin manifest (`plugin.json`)
@@ -48,7 +48,7 @@ The server is a single-binary axum application. Key modules under `server/src/`:
 
 - **`main.rs`** — CLI parsing (clap) and server startup
 - **`server/`** — HTTP layer
-  - `state.rs` — `AppState` holding `DashMap<PathBuf, Project>` and `DashMap<String, Session>`. Multi-project support with LRU eviction at capacity. Includes `FileCache` (50MB LRU) and `ParseCache` (tree-sitter Tree cache) per project.
+  - `state.rs` — `AppState` holding `DashMap<PathBuf, Project>` and `DashMap<String, Session>`. Multi-project support with capacity-based eviction. Includes `FileCache` (50MB, wholesale eviction when over capacity) and `ParseCache` (tree-sitter Tree cache) per project.
   - `routes.rs` — All route handlers. Each handler calls `require_project()` to resolve session→project, then delegates to an `ops` function.
   - `session.rs` — Session struct with command history
   - `errors.rs` — `AppError` enum mapped to HTTP status codes (400/404/410/500)
@@ -94,9 +94,8 @@ The skill wraps the API with a Python CLI (no external dependencies):
 python3 plugin/skills/coderlm/scripts/coderlm_cli.py <command> [args]
 ```
 
-The `.claude/skills/coderlm/scripts/coderlm_cli.py` path also works when running locally (via the workaround copy).
+Session state cached in `.claude/coderlm_state/session.json`. Override with `CODERLM_STATE_DIR` env var. The CLI must be run from the project root that was indexed. Key commands: `init`, `structure`, `symbols`, `search`, `impl` (`--file` auto-resolves via search if unique), `callers`, `tests`, `variables`, `peek` (`--line N` for 1-indexed single line, `--start`/`--end` for 0-indexed ranges), `grep` (with `--scope code`), `save-annotations`, `load-annotations`, `cleanup`. Full reference in `plugin/skills/coderlm/references/api-reference.md`.
 
-Session state cached in `.claude/coderlm_state/session.json`. The CLI must be run from the project root that was indexed. Key commands: `init`, `structure`, `symbols`, `search`, `impl`, `callers`, `tests`, `grep` (with `--scope code`), `peek`, `save-annotations`, `load-annotations`, `cleanup`. Full reference in `plugin/skills/coderlm/references/api-reference.md`.
 
 ## Workflow: Codebase Exploration
 
