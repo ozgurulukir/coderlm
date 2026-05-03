@@ -56,8 +56,9 @@ impl FileCache {
         }
 
         let mut cache = self.cache.lock();
-        if cache.contains_key(rel_path) {
-            return Ok(content);
+        if let Some(cached) = cache.get(rel_path) {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(cached.clone());
         }
 
         self.misses.fetch_add(1, Ordering::Relaxed);
@@ -126,8 +127,8 @@ pub struct Project {
     pub parse_cache: Arc<ParseCache>,
     pub watcher: Option<watcher::WatcherHandle>,
     pub last_active: Mutex<DateTime<Utc>>,
-    /// Signal set to `true` when initial symbol extraction completes.
-    pub extraction_done: Arc<AtomicU64>,
+    /// Notified when initial symbol extraction completes.
+    pub extraction_notify: Arc<tokio::sync::Notify>,
 }
 
 /// Shared application state, wrapped in Arc for axum handlers.
@@ -205,7 +206,7 @@ impl AppState {
         )
         .ok();
 
-        let extraction_done = Arc::new(AtomicU64::new(0));
+        let extraction_notify = Arc::new(tokio::sync::Notify::new());
         let project = Arc::new(Project {
             root: canonical.clone(),
             file_tree: file_tree.clone(),
@@ -214,12 +215,11 @@ impl AppState {
             parse_cache,
             watcher: watcher_handle,
             last_active: Mutex::new(Utc::now()),
-            extraction_done: extraction_done.clone(),
+            extraction_notify: extraction_notify.clone(),
         });
 
         self.inner.projects.insert(canonical, project.clone());
 
-        // Spawn symbol extraction in background
         let ft = file_tree;
         let st = symbol_table;
         let root = project.root.clone();
@@ -229,7 +229,7 @@ impl AppState {
                 Ok(count) => info!("Extracted {} symbols for {}", count, root.display()),
                 Err(e) => tracing::error!("Symbol extraction failed for {}: {}", root.display(), e),
             }
-            extraction_done.fetch_add(1, Ordering::Release);
+            extraction_notify.notify_one();
         });
 
         Ok(project)

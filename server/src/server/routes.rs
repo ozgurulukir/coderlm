@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
@@ -166,22 +165,14 @@ async fn create_session(
     let created_at = session.created_at;
     state.inner.sessions.insert(id.clone(), session);
 
-    // Load annotations once symbol extraction completes
     let ft = project.file_tree.clone();
     let st = project.symbol_table.clone();
     let root = project.root.clone();
-    let extraction_done = project.extraction_done.clone();
+    let notify = project.extraction_notify.clone();
     tokio::spawn(async move {
-        // Wait for extraction to complete (with a generous timeout)
-        let deadline = std::time::Duration::from_secs(60);
-        let started = std::time::Instant::now();
-        while extraction_done.load(Ordering::Acquire) == 0 {
-            if started.elapsed() > deadline {
-                tracing::warn!("Timed out waiting for symbol extraction in {}", root.display());
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
+        tokio::time::timeout(std::time::Duration::from_secs(60), notify.notified())
+            .await
+            .unwrap_or_else(|_| tracing::warn!("Timed out waiting for symbol extraction in {}", root.display()));
         if let Err(e) = annotations::load_annotations(&root, &ft, &st) {
             tracing::warn!("Failed to load annotations: {}", e);
         }
