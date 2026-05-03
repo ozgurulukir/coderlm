@@ -18,23 +18,87 @@ pub enum SymbolKind {
     Other,
 }
 
-impl SymbolKind {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for SymbolKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "function" | "fn" | "func" => Some(SymbolKind::Function),
-            "method" => Some(SymbolKind::Method),
-            "class" => Some(SymbolKind::Class),
-            "struct" => Some(SymbolKind::Struct),
-            "enum" => Some(SymbolKind::Enum),
-            "trait" => Some(SymbolKind::Trait),
-            "interface" => Some(SymbolKind::Interface),
-            "constant" | "const" => Some(SymbolKind::Constant),
-            "variable" | "var" | "let" => Some(SymbolKind::Variable),
-            "type" => Some(SymbolKind::Type),
-            "module" | "mod" => Some(SymbolKind::Module),
-            "import" | "use" => Some(SymbolKind::Import),
-            _ => None,
+            "function" | "fn" | "func" => Ok(SymbolKind::Function),
+            "method" => Ok(SymbolKind::Method),
+            "class" => Ok(SymbolKind::Class),
+            "struct" => Ok(SymbolKind::Struct),
+            "enum" => Ok(SymbolKind::Enum),
+            "trait" => Ok(SymbolKind::Trait),
+            "interface" => Ok(SymbolKind::Interface),
+            "constant" | "const" => Ok(SymbolKind::Constant),
+            "variable" | "var" | "let" => Ok(SymbolKind::Variable),
+            "type" => Ok(SymbolKind::Type),
+            "module" | "mod" => Ok(SymbolKind::Module),
+            "import" | "use" => Ok(SymbolKind::Import),
+            _ => Err(format!("Unknown symbol kind: '{}'", s)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+    use super::*;
+
+    #[test]
+    fn test_symbol_kind_parse_function() {
+        assert_eq!("function".parse::<SymbolKind>().unwrap(), SymbolKind::Function);
+        assert_eq!("fn".parse::<SymbolKind>().unwrap(), SymbolKind::Function);
+        assert_eq!("func".parse::<SymbolKind>().unwrap(), SymbolKind::Function);
+    }
+
+    #[test]
+    fn test_symbol_kind_parse_class() {
+        assert_eq!("class".parse::<SymbolKind>().unwrap(), SymbolKind::Class);
+        assert_eq!("struct".parse::<SymbolKind>().unwrap(), SymbolKind::Struct);
+        assert_eq!("enum".parse::<SymbolKind>().unwrap(), SymbolKind::Enum);
+        assert_eq!("trait".parse::<SymbolKind>().unwrap(), SymbolKind::Trait);
+        assert_eq!("interface".parse::<SymbolKind>().unwrap(), SymbolKind::Interface);
+    }
+
+    #[test]
+    fn test_symbol_kind_parse_other() {
+        assert_eq!("module".parse::<SymbolKind>().unwrap(), SymbolKind::Module);
+        assert_eq!("mod".parse::<SymbolKind>().unwrap(), SymbolKind::Module);
+        assert_eq!("constant".parse::<SymbolKind>().unwrap(), SymbolKind::Constant);
+        assert_eq!("const".parse::<SymbolKind>().unwrap(), SymbolKind::Constant);
+        assert_eq!("variable".parse::<SymbolKind>().unwrap(), SymbolKind::Variable);
+    }
+
+    #[test]
+    fn test_symbol_kind_parse_invalid() {
+        assert!("foobar".parse::<SymbolKind>().is_err());
+        assert!("".parse::<SymbolKind>().is_err());
+    }
+
+    #[test]
+    fn test_symbol_kind_fromstr_trait() {
+        assert_eq!(SymbolKind::from_str("fn").unwrap(), SymbolKind::Function);
+        assert!(SymbolKind::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_symbol_struct_fields() {
+        let sym = Symbol {
+            name: "foo".to_string(),
+            kind: SymbolKind::Function,
+            file: "lib.rs".to_string(),
+            byte_range: (0, 10),
+            line_range: (1, 3),
+            language: crate::index::file_entry::Language::Rust,
+            signature: "fn foo()".to_string(),
+            definition: None,
+            parent: None,
+        };
+        assert_eq!(sym.name, "foo");
+        assert_eq!(sym.kind, SymbolKind::Function);
+        assert_eq!(sym.file, "lib.rs");
+        assert_eq!(sym.byte_range, (0, 10));
     }
 }
 

@@ -1,15 +1,10 @@
-mod config;
-mod index;
-mod ops;
-mod server;
-mod symbols;
-
 use std::path::PathBuf;
 
 use clap::Parser;
+use coderlm_server::config;
+use coderlm_server::server::state::AppState;
+use coderlm_server::server;
 use tracing::info;
-
-use server::state::AppState;
 
 #[derive(Parser)]
 #[command(name = "coderlm", about = "CoderLM REPL server for code-aware agent sessions")]

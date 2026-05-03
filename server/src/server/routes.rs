@@ -42,11 +42,10 @@ fn require_project(state: &AppState, headers: &HeaderMap) -> Result<Arc<Project>
 }
 
 fn record_history(state: &AppState, session_id: Option<&str>, method: &str, path: &str, preview: &str) {
-    if let Some(id) = session_id {
-        if let Some(mut session) = state.inner.sessions.get_mut(id) {
+    if let Some(id) = session_id
+        && let Some(mut session) = state.inner.sessions.get_mut(id) {
             session.record(method, path, preview);
         }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -153,9 +152,12 @@ async fn create_session(
     State(state): State<AppState>,
     Json(body): Json<CreateSessionBody>,
 ) -> Result<Json<Value>, AppError> {
-    let cwd_path = PathBuf::from(&body.cwd);
+    let cwd = body.cwd.trim().to_string();
+    if cwd.is_empty() {
+        return Err(AppError::BadRequest("cwd must not be empty".into()));
+    }
+    let cwd_path = PathBuf::from(&cwd);
 
-    // Index the project (or return existing)
     let project = state.get_or_create_project(&cwd_path)?;
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -163,14 +165,17 @@ async fn create_session(
     let created_at = session.created_at;
     state.inner.sessions.insert(id.clone(), session);
 
-    // Load annotations from disk after project is indexed
     let ft = project.file_tree.clone();
     let st = project.symbol_table.clone();
     let root = project.root.clone();
+    let notify = project.extraction_notify.clone();
     tokio::spawn(async move {
-        // Small delay to let symbol extraction start first
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        let _ = annotations::load_annotations(&root, &ft, &st);
+        tokio::time::timeout(std::time::Duration::from_secs(60), notify.notified())
+            .await
+            .unwrap_or_else(|_| tracing::warn!("Timed out waiting for symbol extraction in {}", root.display()));
+        if let Err(e) = annotations::load_annotations(&root, &ft, &st) {
+            tracing::warn!("Failed to load annotations: {}", e);
+        }
     });
 
     Ok(Json(json!({
@@ -262,7 +267,8 @@ async fn get_structure(
     let result = structure::get_structure(&project.file_tree, depth);
     let preview = format!("{} files", result.file_count);
     record_history(&state, session_id(&headers).as_deref(), "GET", "/structure", &preview);
-    Ok(Json(serde_json::to_value(result).unwrap()))
+    let value = serde_json::to_value(result).map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(Json(value))
 }
 
 #[derive(Deserialize)]
@@ -331,7 +337,7 @@ async fn list_symbols(
     Query(params): Query<SymbolListQuery>,
 ) -> Result<Json<Value>, AppError> {
     let project = require_project(&state, &headers)?;
-    let kind_filter = params.kind.as_deref().and_then(SymbolKind::from_str);
+    let kind_filter = params.kind.as_deref().and_then(|s| s.parse::<SymbolKind>().ok());
     let limit = params.limit.unwrap_or(100);
     let (results, next_cursor) = symbol_ops::list_symbols(
         &project.symbol_table,
@@ -563,7 +569,8 @@ async fn peek(
     .map_err(AppError::NotFound)?;
     let preview = format!("{}:{}-{}", params.file, start, end);
     record_history(&state, session_id(&headers).as_deref(), "GET", "/peek", &preview);
-    Ok(Json(serde_json::to_value(result).unwrap()))
+    let value = serde_json::to_value(result).map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(Json(value))
 }
 
 #[derive(Deserialize)]
@@ -586,8 +593,7 @@ async fn grep_handler(
     let scope = params
         .scope
         .as_deref()
-        .map(|s| content::GrepScope::from_str(s))
-        .flatten()
+        .and_then(|s| s.parse::<content::GrepScope>().ok())
         .unwrap_or(content::GrepScope::All);
 
     // Run grep on a blocking thread since it reads many files
@@ -606,7 +612,8 @@ async fn grep_handler(
 
     let preview = format!("{} matches for '{}'", result.total_matches, params.pattern);
     record_history(&state, session_id(&headers).as_deref(), "GET", "/grep", &preview);
-    Ok(Json(serde_json::to_value(result).unwrap()))
+    let value = serde_json::to_value(result).map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(Json(value))
 }
 
 #[derive(Deserialize)]
@@ -635,7 +642,8 @@ async fn chunk_indices(
     .map_err(AppError::BadRequest)?;
     let preview = format!("{} chunks for {}", result.chunks.len(), params.file);
     record_history(&state, session_id(&headers).as_deref(), "GET", "/chunk_indices", &preview);
-    Ok(Json(serde_json::to_value(result).unwrap()))
+    let value = serde_json::to_value(result).map_err(|e| AppError::Internal(e.to_string()))?;
+    Ok(Json(value))
 }
 
 // ---------------------------------------------------------------------------

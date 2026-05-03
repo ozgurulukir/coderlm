@@ -15,6 +15,12 @@ pub struct LanguageBreakdown {
     pub count: usize,
 }
 
+impl Default for FileTree {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileTree {
     pub fn new() -> Self {
         Self {
@@ -38,6 +44,10 @@ impl FileTree {
         self.files.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
     pub fn language_breakdown(&self) -> Vec<LanguageBreakdown> {
         let mut counts: HashMap<Language, usize> = HashMap::new();
         for entry in self.files.iter() {
@@ -47,7 +57,7 @@ impl FileTree {
             .into_iter()
             .map(|(language, count)| LanguageBreakdown { language, count })
             .collect();
-        breakdown.sort_by(|a, b| b.count.cmp(&a.count));
+        breakdown.sort_by_key(|b| std::cmp::Reverse(b.count));
         breakdown
     }
 

@@ -11,7 +11,7 @@ pub fn get_history(state: &AppState, session_id: &str, limit: usize) -> Result<V
 
     let history = &session.history;
     let start = history.len().saturating_sub(limit);
-    Ok(history[start..].to_vec())
+    Ok(history.iter().skip(start).cloned().collect())
 }
 
 #[derive(Debug, Serialize)]
@@ -34,7 +34,7 @@ pub fn get_all_history(state: &AppState, limit: usize) -> Vec<SessionHistoryBloc
             SessionHistoryBlock {
                 session_id: session.id.clone(),
                 project: session.project_path.display().to_string(),
-                entries: history[start..].to_vec(),
+                entries: history.iter().skip(start).cloned().collect(),
             }
         })
         .collect();

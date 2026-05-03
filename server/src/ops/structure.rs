@@ -72,7 +72,7 @@ pub fn mark_file(
     file: &str,
     mark_str: &str,
 ) -> Result<(), String> {
-    let mark = FileMark::from_str(mark_str)
+    let mark = FileMark::from_name(mark_str)
         .ok_or_else(|| format!("Unknown mark type: '{}'. Valid: documentation, ignore, test, config, generated, custom", mark_str))?;
 
     if let Some(mut entry) = file_tree.files.get_mut(file) {

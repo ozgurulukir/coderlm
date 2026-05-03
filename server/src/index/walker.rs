@@ -28,7 +28,7 @@ pub fn scan_directory(root: &Path, file_tree: &Arc<FileTree>, max_file_size: u64
         };
 
         // Skip directories
-        if entry.file_type().map_or(true, |ft| ft.is_dir()) {
+        if entry.file_type().is_none_or(|ft| ft.is_dir()) {
             continue;
         }
 

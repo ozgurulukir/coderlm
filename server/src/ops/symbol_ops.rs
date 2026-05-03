@@ -41,11 +41,10 @@ pub fn list_symbols(
     });
 
     // 4. Apply cursor slice
-    if let Some(c) = cursor {
-        if let Some(pos) = results.iter().position(|s| make_cursor(s) == c) {
+    if let Some(c) = cursor
+        && let Some(pos) = results.iter().position(|s| make_cursor(s) == c) {
             results = results.split_off(pos + 1);
         }
-    }
 
     let has_more = results.len() > limit;
     results.truncate(limit);
@@ -176,6 +175,7 @@ fn collect_non_ts_files(file_tree: &Arc<FileTree>, candidates: &mut Vec<String>)
 
 /// Find callers of a symbol using tree-sitter call-expression queries.
 /// Falls back to regex for files without tree-sitter support.
+#[allow(clippy::too_many_arguments)]
 pub fn find_callers(
     root: &Path,
     file_tree: &Arc<FileTree>,

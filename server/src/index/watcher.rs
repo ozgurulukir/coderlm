@@ -102,8 +102,9 @@ fn handle_events(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_file_change(
-    root: &PathBuf,
+    root: &Path,
     file_tree: &Arc<FileTree>,
     symbol_table: &Arc<SymbolTable>,
     file_cache: &Arc<FileCache>,
@@ -112,11 +113,9 @@ fn handle_file_change(
     rel_path: &str,
     abs_path: &Path,
 ) {
-    // Invalidate caches
     file_cache.invalidate(rel_path);
     parse_cache.invalidate(rel_path);
 
-    // Check extension-based ignoring
     if config::should_ignore_extension(rel_path) {
         return;
     }
