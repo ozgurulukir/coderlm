@@ -110,7 +110,7 @@ pub fn load_annotations(
     for (path, marks) in &data.file_marks {
         if let Some(mut entry) = file_tree.files.get_mut(path.as_str()) {
             for mark_str in marks {
-                if let Some(mark) = FileMark::from_str(mark_str) {
+                if let Some(mark) = FileMark::from_name(mark_str) {
                     if !entry.marks.contains(&mark) {
                         entry.marks.push(mark);
                     }

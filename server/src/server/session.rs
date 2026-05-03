@@ -3,6 +3,10 @@ use std::path::PathBuf;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Maximum number of history entries to keep per session.
+/// Prevents unbounded memory growth in long-running sessions.
+const MAX_HISTORY: usize = 1000;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub timestamp: DateTime<Utc>,
@@ -33,6 +37,9 @@ impl Session {
     }
 
     pub fn record(&mut self, method: &str, path: &str, response_preview: &str) {
+        if self.history.len() >= MAX_HISTORY {
+            self.history.remove(0);
+        }
         self.last_active = Utc::now();
         self.history.push(HistoryEntry {
             timestamp: Utc::now(),

@@ -1,7 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use regex::Regex;
 use serde::Serialize;
 
 use crate::index::file_entry::Language;
@@ -83,16 +82,19 @@ pub enum GrepScope {
     Code,
 }
 
-impl GrepScope {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for GrepScope {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "all" => Some(GrepScope::All),
-            "code" => Some(GrepScope::Code),
-            _ => None,
+            "all" => Ok(GrepScope::All),
+            "code" => Ok(GrepScope::Code),
+            _ => Err(format!("Unknown grep scope: '{}'. Valid: all, code", s)),
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn grep_with_scope(
     root: &Path,
     file_tree: &Arc<FileTree>,
@@ -103,7 +105,10 @@ pub fn grep_with_scope(
     context_lines: usize,
     scope: GrepScope,
 ) -> Result<GrepResponse, String> {
-    let re = Regex::new(pattern).map_err(|e| format!("Invalid regex: {}", e))?;
+    let re = regex::RegexBuilder::new(pattern)
+        .size_limit(1_000_000)
+        .build()
+        .map_err(|e| format!("Invalid regex: {}", e))?;
 
     let mut matches = Vec::new();
     let mut total = 0;
@@ -344,4 +349,72 @@ pub fn chunk_indices(
         overlap,
         chunks,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+    use super::*;
+
+    #[test]
+    fn test_chunk_indices_basic() {
+        let file_size = 1000;
+        let chunks = calculate_chunks(file_size, 400, 100);
+        assert_eq!(chunks, vec![
+            (0, 400),
+            (300, 700),
+            (600, 1000),
+        ]);
+    }
+
+    #[test]
+    fn test_chunk_indices_small_file() {
+        let chunks = calculate_chunks(50, 400, 100);
+        assert_eq!(chunks, vec![(0, 50)]);
+    }
+
+    #[test]
+    fn test_chunk_indices_exact_fit() {
+        let chunks = calculate_chunks(400, 400, 100);
+        assert_eq!(chunks, vec![(0, 400)]);
+    }
+
+    #[test]
+    fn test_chunk_indices_no_overlap() {
+        let chunks = calculate_chunks(1000, 200, 0);
+        assert_eq!(chunks, vec![
+            (0, 200),
+            (200, 400),
+            (400, 600),
+            (600, 800),
+            (800, 1000),
+        ]);
+    }
+
+    #[test]
+    fn test_grep_scope_parse() {
+        assert_eq!("all".parse::<GrepScope>().unwrap(), GrepScope::All);
+        assert_eq!("code".parse::<GrepScope>().unwrap(), GrepScope::Code);
+    }
+
+    #[test]
+    fn test_grep_scope_parse_invalid() {
+        assert!("unknown".parse::<GrepScope>().is_err());
+        assert!("".parse::<GrepScope>().is_err());
+    }
+
+    fn calculate_chunks(total_bytes: usize, chunk_size: usize, overlap: usize) -> Vec<(usize, usize)> {
+        let step = chunk_size - overlap;
+        let mut chunks = Vec::new();
+        let mut start = 0;
+        while start < total_bytes {
+            let end = (start + chunk_size).min(total_bytes);
+            chunks.push((start, end));
+            start += step;
+            if end >= total_bytes {
+                break;
+            }
+        }
+        chunks
+    }
 }

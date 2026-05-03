@@ -82,7 +82,7 @@ pub enum FileMark {
 }
 
 impl FileMark {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "documentation" | "doc" | "docs" => Some(FileMark::Documentation),
             "ignore" => Some(FileMark::Ignore),
@@ -121,5 +121,76 @@ impl FileEntry {
             marks: Vec::new(),
             symbols_extracted: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_language_from_extension_rust() {
+        assert_eq!(Language::from_extension("rs"), Language::Rust);
+    }
+
+    #[test]
+    fn test_language_from_extension_python() {
+        assert_eq!(Language::from_extension("py"), Language::Python);
+        assert_eq!(Language::from_extension("pyi"), Language::Python);
+    }
+
+    #[test]
+    fn test_language_from_extension_ts() {
+        assert_eq!(Language::from_extension("ts"), Language::TypeScript);
+        assert_eq!(Language::from_extension("tsx"), Language::TypeScript);
+    }
+
+    #[test]
+    fn test_language_from_extension_js() {
+        assert_eq!(Language::from_extension("js"), Language::JavaScript);
+        assert_eq!(Language::from_extension("mjs"), Language::JavaScript);
+    }
+
+    #[test]
+    fn test_language_from_extension_others() {
+        assert_eq!(Language::from_extension("go"), Language::Go);
+        assert_eq!(Language::from_extension("java"), Language::Java);
+        assert_eq!(Language::from_extension("scala"), Language::Scala);
+        assert_eq!(Language::from_extension("vue"), Language::Vue);
+        assert_eq!(Language::from_extension("sql"), Language::Sql);
+    }
+
+    #[test]
+    fn test_language_from_extension_unknown() {
+        assert_eq!(Language::from_extension("xyz"), Language::Other);
+        assert_eq!(Language::from_extension(""), Language::Other);
+    }
+
+    #[test]
+    fn test_filemark_from_str() {
+        assert_eq!(FileMark::from_name("documentation"), Some(FileMark::Documentation));
+        assert_eq!(FileMark::from_name("doc"), Some(FileMark::Documentation));
+        assert_eq!(FileMark::from_name("test"), Some(FileMark::Test));
+        assert_eq!(FileMark::from_name("ignore"), Some(FileMark::Ignore));
+        assert_eq!(FileMark::from_name("config"), Some(FileMark::Config));
+        assert_eq!(FileMark::from_name("generated"), Some(FileMark::Generated));
+        assert_eq!(FileMark::from_name("custom"), Some(FileMark::Custom));
+    }
+
+    #[test]
+    fn test_filemark_from_name_invalid() {
+        assert_eq!(FileMark::from_name("unknown"), None);
+        assert_eq!(FileMark::from_name(""), None);
+    }
+
+    #[test]
+    fn test_tree_sitter_support() {
+        assert!(Language::Rust.has_tree_sitter_support());
+        assert!(Language::Python.has_tree_sitter_support());
+        assert!(Language::TypeScript.has_tree_sitter_support());
+        assert!(Language::JavaScript.has_tree_sitter_support());
+        assert!(Language::Go.has_tree_sitter_support());
+        assert!(!Language::Markdown.has_tree_sitter_support());
+        assert!(!Language::Other.has_tree_sitter_support());
     }
 }

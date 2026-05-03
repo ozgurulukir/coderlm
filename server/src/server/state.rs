@@ -56,9 +56,7 @@ impl FileCache {
         }
 
         let mut cache = self.cache.lock();
-        // Double-check: another thread may have inserted while we were reading
         if cache.contains_key(rel_path) {
-            self.hits.fetch_add(1, Ordering::Relaxed);
             return Ok(content);
         }
 
@@ -126,10 +124,10 @@ pub struct Project {
     pub symbol_table: Arc<SymbolTable>,
     pub file_cache: Arc<FileCache>,
     pub parse_cache: Arc<ParseCache>,
-    // Held alive to keep the filesystem watcher running; dropped on eviction.
-    #[allow(dead_code)]
     pub watcher: Option<watcher::WatcherHandle>,
     pub last_active: Mutex<DateTime<Utc>>,
+    /// Signal set to `true` when initial symbol extraction completes.
+    pub extraction_done: Arc<AtomicU64>,
 }
 
 /// Shared application state, wrapped in Arc for axum handlers.
@@ -186,8 +184,8 @@ impl AppState {
         // Scan directory
         let file_tree = Arc::new(FileTree::new());
         let symbol_table = Arc::new(SymbolTable::new());
-        let file_cache = Arc::new(FileCache::new(50 * 1024 * 1024)); // 50 MB
-        let parse_cache = Arc::new(ParseCache::new(200)); // 200 trees
+        let file_cache = Arc::new(FileCache::new(crate::config::DEFAULT_FILE_CACHE_BYTES));
+        let parse_cache = Arc::new(ParseCache::new(crate::config::DEFAULT_PARSE_CACHE_ENTRIES));
         let max_file_size = self.inner.max_file_size;
 
         info!("Indexing new project: {}", canonical.display());
@@ -207,6 +205,7 @@ impl AppState {
         )
         .ok();
 
+        let extraction_done = Arc::new(AtomicU64::new(0));
         let project = Arc::new(Project {
             root: canonical.clone(),
             file_tree: file_tree.clone(),
@@ -215,6 +214,7 @@ impl AppState {
             parse_cache,
             watcher: watcher_handle,
             last_active: Mutex::new(Utc::now()),
+            extraction_done: extraction_done.clone(),
         });
 
         self.inner.projects.insert(canonical, project.clone());
@@ -229,6 +229,7 @@ impl AppState {
                 Ok(count) => info!("Extracted {} symbols for {}", count, root.display()),
                 Err(e) => tracing::error!("Symbol extraction failed for {}: {}", root.display(), e),
             }
+            extraction_done.fetch_add(1, Ordering::Release);
         });
 
         Ok(project)

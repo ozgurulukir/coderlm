@@ -45,8 +45,14 @@ pub const DEFAULT_IGNORE_EXTENSIONS: &[&str] = &[
 /// are still listed in the tree but are not parsed for symbols.
 pub const DEFAULT_MAX_FILE_SIZE: u64 = 1_000_000; // 1 MB
 
+/// Maximum bytes for the in-memory file content cache (default: 50 MB).
+pub const DEFAULT_FILE_CACHE_BYTES: usize = 50 * 1024 * 1024;
+
+/// Maximum number of tree-sitter parse trees to cache.
+pub const DEFAULT_PARSE_CACHE_ENTRIES: usize = 200;
+
 pub fn should_ignore_dir(name: &str) -> bool {
-    DEFAULT_IGNORE_DIRS.iter().any(|&d| d == name)
+    DEFAULT_IGNORE_DIRS.contains(&name)
 }
 
 pub fn should_ignore_extension(path: &str) -> bool {
@@ -54,4 +60,49 @@ pub fn should_ignore_extension(path: &str) -> bool {
     DEFAULT_IGNORE_EXTENSIONS
         .iter()
         .any(|ext| lower.ends_with(&format!(".{}", ext)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_ignore_dir_common() {
+        assert!(should_ignore_dir("node_modules"));
+        assert!(should_ignore_dir("target"));
+        assert!(should_ignore_dir(".git"));
+        assert!(should_ignore_dir("__pycache__"));
+        assert!(should_ignore_dir("dist"));
+    }
+
+    #[test]
+    fn test_should_ignore_dir_normal() {
+        assert!(!should_ignore_dir("src"));
+        assert!(!should_ignore_dir("lib"));
+        assert!(!should_ignore_dir("tests"));
+    }
+
+    #[test]
+    fn test_should_ignore_extension_binary() {
+        assert!(should_ignore_extension("foo.min.js"));
+        assert!(should_ignore_extension("bar.pyc"));
+        assert!(should_ignore_extension("lib.o"));
+        assert!(should_ignore_extension("archive.zip"));
+        assert!(should_ignore_extension("image.png"));
+    }
+
+    #[test]
+    fn test_should_ignore_extension_source() {
+        assert!(!should_ignore_extension("main.rs"));
+        assert!(!should_ignore_extension("lib.py"));
+        assert!(!should_ignore_extension("index.js"));
+        assert!(!should_ignore_extension("style.css"));
+        assert!(!should_ignore_extension("page.html"));
+    }
+
+    #[test]
+    fn test_should_ignore_extension_path_with_slashes() {
+        assert!(should_ignore_extension("dist/bundle.min.js"));
+        assert!(!should_ignore_extension("src/main.rs"));
+    }
 }
